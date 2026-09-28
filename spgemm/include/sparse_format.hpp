@@ -1,0 +1,18 @@
+#pragma once
+
+#include <cstddef>
+
+struct CSRMatrix {
+    size_t* row_ptr = nullptr;     // size: num_rows + 1
+    size_t* col_indices = nullptr; // size: nnz
+    float* values = nullptr;       // size: nnz
+    size_t num_rows = 0;
+    size_t num_cols = 0;
+    size_t nnz = 0;
+};
+
+bool create_sparse_csr_matrix(int M, int N, float sparsity, CSRMatrix& csr_matrix, int seed = 42);
+void allocate_csr_matrix_device(const CSRMatrix& host_matrix, CSRMatrix& device_matrix);
+void copy_csr_matrix_to_host(const CSRMatrix& device_matrix, CSRMatrix& host_matrix);
+void free_csr_matrix_host(CSRMatrix& matrix);
+void free_csr_matrix_device(CSRMatrix& matrix);

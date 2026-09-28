@@ -1,0 +1,1 @@
+-I"/home/sabbir/Documents/Sabbir/Research/leetgpu-challenge/spgemm/include" -isystem "/usr/local/cuda/targets/x86_64-linux/include" -isystem "/usr/local/cuda/targets/x86_64-linux/include/cccl"

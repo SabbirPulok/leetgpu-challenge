@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"/home/sabbir/Documents/Sabbir/Research/leetgpu-challenge/spgemm/build/cmake_install.cmake"
+	],
+	"Parallel" : false
+}
