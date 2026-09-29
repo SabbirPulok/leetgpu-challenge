@@ -33,7 +33,10 @@ endif()
 file(GLOB NEW_GLOB LIST_DIRECTORIES true "/home/sabbir/Documents/Sabbir/Research/leetgpu-challenge/spgemm/src/*.cu")
 set(OLD_GLOB
   "/home/sabbir/Documents/Sabbir/Research/leetgpu-challenge/spgemm/src/spgemm.cu"
+  "/home/sabbir/Documents/Sabbir/Research/leetgpu-challenge/spgemm/src/spgemm_binning.cu"
   "/home/sabbir/Documents/Sabbir/Research/leetgpu-challenge/spgemm/src/spgemm_cusparse.cu"
+  "/home/sabbir/Documents/Sabbir/Research/leetgpu-challenge/spgemm/src/spgemm_numeric.cu"
+  "/home/sabbir/Documents/Sabbir/Research/leetgpu-challenge/spgemm/src/spgemm_symbolic.cu"
   )
 if(NOT "${NEW_GLOB}" STREQUAL "${OLD_GLOB}")
   message("-- GLOB mismatch!")

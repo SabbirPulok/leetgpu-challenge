@@ -115,11 +115,26 @@ CMakeFiles/spgemm_nvcuda.dir/src/spgemm.cu.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CUDA source to assembly CMakeFiles/spgemm_nvcuda.dir/src/spgemm.cu.s"
 	$(CMAKE_COMMAND) -E cmake_unimplemented_variable CMAKE_CUDA_CREATE_ASSEMBLY_SOURCE
 
+CMakeFiles/spgemm_nvcuda.dir/src/spgemm_binning.cu.o: CMakeFiles/spgemm_nvcuda.dir/flags.make
+CMakeFiles/spgemm_nvcuda.dir/src/spgemm_binning.cu.o: CMakeFiles/spgemm_nvcuda.dir/includes_CUDA.rsp
+CMakeFiles/spgemm_nvcuda.dir/src/spgemm_binning.cu.o: /home/sabbir/Documents/Sabbir/Research/leetgpu-challenge/spgemm/src/spgemm_binning.cu
+CMakeFiles/spgemm_nvcuda.dir/src/spgemm_binning.cu.o: CMakeFiles/spgemm_nvcuda.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/sabbir/Documents/Sabbir/Research/leetgpu-challenge/spgemm/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_4) "Building CUDA object CMakeFiles/spgemm_nvcuda.dir/src/spgemm_binning.cu.o"
+	/usr/local/cuda/bin/nvcc -forward-unknown-to-host-compiler $(CUDA_DEFINES) $(CUDA_INCLUDES) $(CUDA_FLAGS) -MD -MT CMakeFiles/spgemm_nvcuda.dir/src/spgemm_binning.cu.o -MF CMakeFiles/spgemm_nvcuda.dir/src/spgemm_binning.cu.o.d -x cu -rdc=true -c /home/sabbir/Documents/Sabbir/Research/leetgpu-challenge/spgemm/src/spgemm_binning.cu -o CMakeFiles/spgemm_nvcuda.dir/src/spgemm_binning.cu.o
+
+CMakeFiles/spgemm_nvcuda.dir/src/spgemm_binning.cu.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CUDA source to CMakeFiles/spgemm_nvcuda.dir/src/spgemm_binning.cu.i"
+	$(CMAKE_COMMAND) -E cmake_unimplemented_variable CMAKE_CUDA_CREATE_PREPROCESSED_SOURCE
+
+CMakeFiles/spgemm_nvcuda.dir/src/spgemm_binning.cu.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CUDA source to assembly CMakeFiles/spgemm_nvcuda.dir/src/spgemm_binning.cu.s"
+	$(CMAKE_COMMAND) -E cmake_unimplemented_variable CMAKE_CUDA_CREATE_ASSEMBLY_SOURCE
+
 CMakeFiles/spgemm_nvcuda.dir/src/spgemm_cusparse.cu.o: CMakeFiles/spgemm_nvcuda.dir/flags.make
 CMakeFiles/spgemm_nvcuda.dir/src/spgemm_cusparse.cu.o: CMakeFiles/spgemm_nvcuda.dir/includes_CUDA.rsp
 CMakeFiles/spgemm_nvcuda.dir/src/spgemm_cusparse.cu.o: /home/sabbir/Documents/Sabbir/Research/leetgpu-challenge/spgemm/src/spgemm_cusparse.cu
 CMakeFiles/spgemm_nvcuda.dir/src/spgemm_cusparse.cu.o: CMakeFiles/spgemm_nvcuda.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/sabbir/Documents/Sabbir/Research/leetgpu-challenge/spgemm/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_4) "Building CUDA object CMakeFiles/spgemm_nvcuda.dir/src/spgemm_cusparse.cu.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/sabbir/Documents/Sabbir/Research/leetgpu-challenge/spgemm/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_5) "Building CUDA object CMakeFiles/spgemm_nvcuda.dir/src/spgemm_cusparse.cu.o"
 	/usr/local/cuda/bin/nvcc -forward-unknown-to-host-compiler $(CUDA_DEFINES) $(CUDA_INCLUDES) $(CUDA_FLAGS) -MD -MT CMakeFiles/spgemm_nvcuda.dir/src/spgemm_cusparse.cu.o -MF CMakeFiles/spgemm_nvcuda.dir/src/spgemm_cusparse.cu.o.d -x cu -rdc=true -c /home/sabbir/Documents/Sabbir/Research/leetgpu-challenge/spgemm/src/spgemm_cusparse.cu -o CMakeFiles/spgemm_nvcuda.dir/src/spgemm_cusparse.cu.o
 
 CMakeFiles/spgemm_nvcuda.dir/src/spgemm_cusparse.cu.i: cmake_force
@@ -130,10 +145,25 @@ CMakeFiles/spgemm_nvcuda.dir/src/spgemm_cusparse.cu.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CUDA source to assembly CMakeFiles/spgemm_nvcuda.dir/src/spgemm_cusparse.cu.s"
 	$(CMAKE_COMMAND) -E cmake_unimplemented_variable CMAKE_CUDA_CREATE_ASSEMBLY_SOURCE
 
+CMakeFiles/spgemm_nvcuda.dir/src/spgemm_numeric.cu.o: CMakeFiles/spgemm_nvcuda.dir/flags.make
+CMakeFiles/spgemm_nvcuda.dir/src/spgemm_numeric.cu.o: CMakeFiles/spgemm_nvcuda.dir/includes_CUDA.rsp
+CMakeFiles/spgemm_nvcuda.dir/src/spgemm_numeric.cu.o: /home/sabbir/Documents/Sabbir/Research/leetgpu-challenge/spgemm/src/spgemm_numeric.cu
+CMakeFiles/spgemm_nvcuda.dir/src/spgemm_numeric.cu.o: CMakeFiles/spgemm_nvcuda.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/sabbir/Documents/Sabbir/Research/leetgpu-challenge/spgemm/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_6) "Building CUDA object CMakeFiles/spgemm_nvcuda.dir/src/spgemm_numeric.cu.o"
+	/usr/local/cuda/bin/nvcc -forward-unknown-to-host-compiler $(CUDA_DEFINES) $(CUDA_INCLUDES) $(CUDA_FLAGS) -MD -MT CMakeFiles/spgemm_nvcuda.dir/src/spgemm_numeric.cu.o -MF CMakeFiles/spgemm_nvcuda.dir/src/spgemm_numeric.cu.o.d -x cu -rdc=true -c /home/sabbir/Documents/Sabbir/Research/leetgpu-challenge/spgemm/src/spgemm_numeric.cu -o CMakeFiles/spgemm_nvcuda.dir/src/spgemm_numeric.cu.o
+
+CMakeFiles/spgemm_nvcuda.dir/src/spgemm_numeric.cu.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CUDA source to CMakeFiles/spgemm_nvcuda.dir/src/spgemm_numeric.cu.i"
+	$(CMAKE_COMMAND) -E cmake_unimplemented_variable CMAKE_CUDA_CREATE_PREPROCESSED_SOURCE
+
+CMakeFiles/spgemm_nvcuda.dir/src/spgemm_numeric.cu.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CUDA source to assembly CMakeFiles/spgemm_nvcuda.dir/src/spgemm_numeric.cu.s"
+	$(CMAKE_COMMAND) -E cmake_unimplemented_variable CMAKE_CUDA_CREATE_ASSEMBLY_SOURCE
+
 CMakeFiles/spgemm_nvcuda.dir/src/spgemm_reference.cpp.o: CMakeFiles/spgemm_nvcuda.dir/flags.make
 CMakeFiles/spgemm_nvcuda.dir/src/spgemm_reference.cpp.o: /home/sabbir/Documents/Sabbir/Research/leetgpu-challenge/spgemm/src/spgemm_reference.cpp
 CMakeFiles/spgemm_nvcuda.dir/src/spgemm_reference.cpp.o: CMakeFiles/spgemm_nvcuda.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/sabbir/Documents/Sabbir/Research/leetgpu-challenge/spgemm/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_5) "Building CXX object CMakeFiles/spgemm_nvcuda.dir/src/spgemm_reference.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/sabbir/Documents/Sabbir/Research/leetgpu-challenge/spgemm/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_7) "Building CXX object CMakeFiles/spgemm_nvcuda.dir/src/spgemm_reference.cpp.o"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/spgemm_nvcuda.dir/src/spgemm_reference.cpp.o -MF CMakeFiles/spgemm_nvcuda.dir/src/spgemm_reference.cpp.o.d -o CMakeFiles/spgemm_nvcuda.dir/src/spgemm_reference.cpp.o -c /home/sabbir/Documents/Sabbir/Research/leetgpu-challenge/spgemm/src/spgemm_reference.cpp
 
 CMakeFiles/spgemm_nvcuda.dir/src/spgemm_reference.cpp.i: cmake_force
@@ -144,13 +174,31 @@ CMakeFiles/spgemm_nvcuda.dir/src/spgemm_reference.cpp.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/spgemm_nvcuda.dir/src/spgemm_reference.cpp.s"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/sabbir/Documents/Sabbir/Research/leetgpu-challenge/spgemm/src/spgemm_reference.cpp -o CMakeFiles/spgemm_nvcuda.dir/src/spgemm_reference.cpp.s
 
+CMakeFiles/spgemm_nvcuda.dir/src/spgemm_symbolic.cu.o: CMakeFiles/spgemm_nvcuda.dir/flags.make
+CMakeFiles/spgemm_nvcuda.dir/src/spgemm_symbolic.cu.o: CMakeFiles/spgemm_nvcuda.dir/includes_CUDA.rsp
+CMakeFiles/spgemm_nvcuda.dir/src/spgemm_symbolic.cu.o: /home/sabbir/Documents/Sabbir/Research/leetgpu-challenge/spgemm/src/spgemm_symbolic.cu
+CMakeFiles/spgemm_nvcuda.dir/src/spgemm_symbolic.cu.o: CMakeFiles/spgemm_nvcuda.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/sabbir/Documents/Sabbir/Research/leetgpu-challenge/spgemm/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_8) "Building CUDA object CMakeFiles/spgemm_nvcuda.dir/src/spgemm_symbolic.cu.o"
+	/usr/local/cuda/bin/nvcc -forward-unknown-to-host-compiler $(CUDA_DEFINES) $(CUDA_INCLUDES) $(CUDA_FLAGS) -MD -MT CMakeFiles/spgemm_nvcuda.dir/src/spgemm_symbolic.cu.o -MF CMakeFiles/spgemm_nvcuda.dir/src/spgemm_symbolic.cu.o.d -x cu -rdc=true -c /home/sabbir/Documents/Sabbir/Research/leetgpu-challenge/spgemm/src/spgemm_symbolic.cu -o CMakeFiles/spgemm_nvcuda.dir/src/spgemm_symbolic.cu.o
+
+CMakeFiles/spgemm_nvcuda.dir/src/spgemm_symbolic.cu.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CUDA source to CMakeFiles/spgemm_nvcuda.dir/src/spgemm_symbolic.cu.i"
+	$(CMAKE_COMMAND) -E cmake_unimplemented_variable CMAKE_CUDA_CREATE_PREPROCESSED_SOURCE
+
+CMakeFiles/spgemm_nvcuda.dir/src/spgemm_symbolic.cu.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CUDA source to assembly CMakeFiles/spgemm_nvcuda.dir/src/spgemm_symbolic.cu.s"
+	$(CMAKE_COMMAND) -E cmake_unimplemented_variable CMAKE_CUDA_CREATE_ASSEMBLY_SOURCE
+
 # Object files for target spgemm_nvcuda
 spgemm_nvcuda_OBJECTS = \
 "CMakeFiles/spgemm_nvcuda.dir/src/main.cpp.o" \
 "CMakeFiles/spgemm_nvcuda.dir/src/sparse_format.cpp.o" \
 "CMakeFiles/spgemm_nvcuda.dir/src/spgemm.cu.o" \
+"CMakeFiles/spgemm_nvcuda.dir/src/spgemm_binning.cu.o" \
 "CMakeFiles/spgemm_nvcuda.dir/src/spgemm_cusparse.cu.o" \
-"CMakeFiles/spgemm_nvcuda.dir/src/spgemm_reference.cpp.o"
+"CMakeFiles/spgemm_nvcuda.dir/src/spgemm_numeric.cu.o" \
+"CMakeFiles/spgemm_nvcuda.dir/src/spgemm_reference.cpp.o" \
+"CMakeFiles/spgemm_nvcuda.dir/src/spgemm_symbolic.cu.o"
 
 # External object files for target spgemm_nvcuda
 spgemm_nvcuda_EXTERNAL_OBJECTS =
@@ -158,15 +206,18 @@ spgemm_nvcuda_EXTERNAL_OBJECTS =
 CMakeFiles/spgemm_nvcuda.dir/cmake_device_link.o: CMakeFiles/spgemm_nvcuda.dir/src/main.cpp.o
 CMakeFiles/spgemm_nvcuda.dir/cmake_device_link.o: CMakeFiles/spgemm_nvcuda.dir/src/sparse_format.cpp.o
 CMakeFiles/spgemm_nvcuda.dir/cmake_device_link.o: CMakeFiles/spgemm_nvcuda.dir/src/spgemm.cu.o
+CMakeFiles/spgemm_nvcuda.dir/cmake_device_link.o: CMakeFiles/spgemm_nvcuda.dir/src/spgemm_binning.cu.o
 CMakeFiles/spgemm_nvcuda.dir/cmake_device_link.o: CMakeFiles/spgemm_nvcuda.dir/src/spgemm_cusparse.cu.o
+CMakeFiles/spgemm_nvcuda.dir/cmake_device_link.o: CMakeFiles/spgemm_nvcuda.dir/src/spgemm_numeric.cu.o
 CMakeFiles/spgemm_nvcuda.dir/cmake_device_link.o: CMakeFiles/spgemm_nvcuda.dir/src/spgemm_reference.cpp.o
+CMakeFiles/spgemm_nvcuda.dir/cmake_device_link.o: CMakeFiles/spgemm_nvcuda.dir/src/spgemm_symbolic.cu.o
 CMakeFiles/spgemm_nvcuda.dir/cmake_device_link.o: CMakeFiles/spgemm_nvcuda.dir/build.make
 CMakeFiles/spgemm_nvcuda.dir/cmake_device_link.o: /usr/lib/x86_64-linux-gnu/libcusparse.so
 CMakeFiles/spgemm_nvcuda.dir/cmake_device_link.o: /usr/local/cuda/targets/x86_64-linux/lib/stubs/libnvJitLink.so
 CMakeFiles/spgemm_nvcuda.dir/cmake_device_link.o: CMakeFiles/spgemm_nvcuda.dir/deviceLinkLibs.rsp
 CMakeFiles/spgemm_nvcuda.dir/cmake_device_link.o: CMakeFiles/spgemm_nvcuda.dir/deviceObjects1.rsp
 CMakeFiles/spgemm_nvcuda.dir/cmake_device_link.o: CMakeFiles/spgemm_nvcuda.dir/dlink.txt
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/home/sabbir/Documents/Sabbir/Research/leetgpu-challenge/spgemm/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_6) "Linking CUDA device code CMakeFiles/spgemm_nvcuda.dir/cmake_device_link.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/home/sabbir/Documents/Sabbir/Research/leetgpu-challenge/spgemm/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_9) "Linking CUDA device code CMakeFiles/spgemm_nvcuda.dir/cmake_device_link.o"
 	$(CMAKE_COMMAND) -E cmake_link_script CMakeFiles/spgemm_nvcuda.dir/dlink.txt --verbose=$(VERBOSE)
 
 # Rule to build all files generated by this target.
@@ -178,8 +229,11 @@ spgemm_nvcuda_OBJECTS = \
 "CMakeFiles/spgemm_nvcuda.dir/src/main.cpp.o" \
 "CMakeFiles/spgemm_nvcuda.dir/src/sparse_format.cpp.o" \
 "CMakeFiles/spgemm_nvcuda.dir/src/spgemm.cu.o" \
+"CMakeFiles/spgemm_nvcuda.dir/src/spgemm_binning.cu.o" \
 "CMakeFiles/spgemm_nvcuda.dir/src/spgemm_cusparse.cu.o" \
-"CMakeFiles/spgemm_nvcuda.dir/src/spgemm_reference.cpp.o"
+"CMakeFiles/spgemm_nvcuda.dir/src/spgemm_numeric.cu.o" \
+"CMakeFiles/spgemm_nvcuda.dir/src/spgemm_reference.cpp.o" \
+"CMakeFiles/spgemm_nvcuda.dir/src/spgemm_symbolic.cu.o"
 
 # External object files for target spgemm_nvcuda
 spgemm_nvcuda_EXTERNAL_OBJECTS =
@@ -187,14 +241,17 @@ spgemm_nvcuda_EXTERNAL_OBJECTS =
 bin/spgemm_nvcuda: CMakeFiles/spgemm_nvcuda.dir/src/main.cpp.o
 bin/spgemm_nvcuda: CMakeFiles/spgemm_nvcuda.dir/src/sparse_format.cpp.o
 bin/spgemm_nvcuda: CMakeFiles/spgemm_nvcuda.dir/src/spgemm.cu.o
+bin/spgemm_nvcuda: CMakeFiles/spgemm_nvcuda.dir/src/spgemm_binning.cu.o
 bin/spgemm_nvcuda: CMakeFiles/spgemm_nvcuda.dir/src/spgemm_cusparse.cu.o
+bin/spgemm_nvcuda: CMakeFiles/spgemm_nvcuda.dir/src/spgemm_numeric.cu.o
 bin/spgemm_nvcuda: CMakeFiles/spgemm_nvcuda.dir/src/spgemm_reference.cpp.o
+bin/spgemm_nvcuda: CMakeFiles/spgemm_nvcuda.dir/src/spgemm_symbolic.cu.o
 bin/spgemm_nvcuda: CMakeFiles/spgemm_nvcuda.dir/build.make
 bin/spgemm_nvcuda: /usr/lib/x86_64-linux-gnu/libcusparse.so
 bin/spgemm_nvcuda: /usr/local/cuda/targets/x86_64-linux/lib/stubs/libnvJitLink.so
 bin/spgemm_nvcuda: CMakeFiles/spgemm_nvcuda.dir/cmake_device_link.o
 bin/spgemm_nvcuda: CMakeFiles/spgemm_nvcuda.dir/link.txt
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/home/sabbir/Documents/Sabbir/Research/leetgpu-challenge/spgemm/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_7) "Linking CXX executable bin/spgemm_nvcuda"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/home/sabbir/Documents/Sabbir/Research/leetgpu-challenge/spgemm/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_10) "Linking CXX executable bin/spgemm_nvcuda"
 	$(CMAKE_COMMAND) -E cmake_link_script CMakeFiles/spgemm_nvcuda.dir/link.txt --verbose=$(VERBOSE)
 
 # Rule to build all files generated by this target.

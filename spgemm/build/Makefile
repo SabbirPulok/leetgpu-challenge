@@ -202,6 +202,30 @@ src/spgemm.cu.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/spgemm_nvcuda.dir/build.make CMakeFiles/spgemm_nvcuda.dir/src/spgemm.cu.s
 .PHONY : src/spgemm.cu.s
 
+src/spgemm_binning.o: src/spgemm_binning.cu.o
+.PHONY : src/spgemm_binning.o
+
+# target to build an object file
+src/spgemm_binning.cu.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/spgemm_nvcuda.dir/build.make CMakeFiles/spgemm_nvcuda.dir/src/spgemm_binning.cu.o
+.PHONY : src/spgemm_binning.cu.o
+
+src/spgemm_binning.i: src/spgemm_binning.cu.i
+.PHONY : src/spgemm_binning.i
+
+# target to preprocess a source file
+src/spgemm_binning.cu.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/spgemm_nvcuda.dir/build.make CMakeFiles/spgemm_nvcuda.dir/src/spgemm_binning.cu.i
+.PHONY : src/spgemm_binning.cu.i
+
+src/spgemm_binning.s: src/spgemm_binning.cu.s
+.PHONY : src/spgemm_binning.s
+
+# target to generate assembly for a file
+src/spgemm_binning.cu.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/spgemm_nvcuda.dir/build.make CMakeFiles/spgemm_nvcuda.dir/src/spgemm_binning.cu.s
+.PHONY : src/spgemm_binning.cu.s
+
 src/spgemm_cusparse.o: src/spgemm_cusparse.cu.o
 .PHONY : src/spgemm_cusparse.o
 
@@ -225,6 +249,30 @@ src/spgemm_cusparse.s: src/spgemm_cusparse.cu.s
 src/spgemm_cusparse.cu.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/spgemm_nvcuda.dir/build.make CMakeFiles/spgemm_nvcuda.dir/src/spgemm_cusparse.cu.s
 .PHONY : src/spgemm_cusparse.cu.s
+
+src/spgemm_numeric.o: src/spgemm_numeric.cu.o
+.PHONY : src/spgemm_numeric.o
+
+# target to build an object file
+src/spgemm_numeric.cu.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/spgemm_nvcuda.dir/build.make CMakeFiles/spgemm_nvcuda.dir/src/spgemm_numeric.cu.o
+.PHONY : src/spgemm_numeric.cu.o
+
+src/spgemm_numeric.i: src/spgemm_numeric.cu.i
+.PHONY : src/spgemm_numeric.i
+
+# target to preprocess a source file
+src/spgemm_numeric.cu.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/spgemm_nvcuda.dir/build.make CMakeFiles/spgemm_nvcuda.dir/src/spgemm_numeric.cu.i
+.PHONY : src/spgemm_numeric.cu.i
+
+src/spgemm_numeric.s: src/spgemm_numeric.cu.s
+.PHONY : src/spgemm_numeric.s
+
+# target to generate assembly for a file
+src/spgemm_numeric.cu.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/spgemm_nvcuda.dir/build.make CMakeFiles/spgemm_nvcuda.dir/src/spgemm_numeric.cu.s
+.PHONY : src/spgemm_numeric.cu.s
 
 src/spgemm_reference.o: src/spgemm_reference.cpp.o
 .PHONY : src/spgemm_reference.o
@@ -250,6 +298,30 @@ src/spgemm_reference.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/spgemm_nvcuda.dir/build.make CMakeFiles/spgemm_nvcuda.dir/src/spgemm_reference.cpp.s
 .PHONY : src/spgemm_reference.cpp.s
 
+src/spgemm_symbolic.o: src/spgemm_symbolic.cu.o
+.PHONY : src/spgemm_symbolic.o
+
+# target to build an object file
+src/spgemm_symbolic.cu.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/spgemm_nvcuda.dir/build.make CMakeFiles/spgemm_nvcuda.dir/src/spgemm_symbolic.cu.o
+.PHONY : src/spgemm_symbolic.cu.o
+
+src/spgemm_symbolic.i: src/spgemm_symbolic.cu.i
+.PHONY : src/spgemm_symbolic.i
+
+# target to preprocess a source file
+src/spgemm_symbolic.cu.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/spgemm_nvcuda.dir/build.make CMakeFiles/spgemm_nvcuda.dir/src/spgemm_symbolic.cu.i
+.PHONY : src/spgemm_symbolic.cu.i
+
+src/spgemm_symbolic.s: src/spgemm_symbolic.cu.s
+.PHONY : src/spgemm_symbolic.s
+
+# target to generate assembly for a file
+src/spgemm_symbolic.cu.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/spgemm_nvcuda.dir/build.make CMakeFiles/spgemm_nvcuda.dir/src/spgemm_symbolic.cu.s
+.PHONY : src/spgemm_symbolic.cu.s
+
 # Help Target
 help:
 	@echo "The following are some of the valid targets for this Makefile:"
@@ -268,12 +340,21 @@ help:
 	@echo "... src/spgemm.o"
 	@echo "... src/spgemm.i"
 	@echo "... src/spgemm.s"
+	@echo "... src/spgemm_binning.o"
+	@echo "... src/spgemm_binning.i"
+	@echo "... src/spgemm_binning.s"
 	@echo "... src/spgemm_cusparse.o"
 	@echo "... src/spgemm_cusparse.i"
 	@echo "... src/spgemm_cusparse.s"
+	@echo "... src/spgemm_numeric.o"
+	@echo "... src/spgemm_numeric.i"
+	@echo "... src/spgemm_numeric.s"
 	@echo "... src/spgemm_reference.o"
 	@echo "... src/spgemm_reference.i"
 	@echo "... src/spgemm_reference.s"
+	@echo "... src/spgemm_symbolic.o"
+	@echo "... src/spgemm_symbolic.i"
+	@echo "... src/spgemm_symbolic.s"
 .PHONY : help
 
 
