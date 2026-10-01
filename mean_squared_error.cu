@@ -41,7 +41,6 @@ __global__ void mean_squared_error(const float *__restrict__ predictions, const 
     }
    }
 
-
     warp_reduce_sum(sum);
 
     if (laneId == 0)
