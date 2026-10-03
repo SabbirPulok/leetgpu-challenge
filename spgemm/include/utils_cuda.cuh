@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <iomanip>
 #include <functional>
 #include <iostream>
@@ -53,6 +54,23 @@ float inline measure_performance(std::function<T(cudaStream_t)> bound_function, 
 
     float const avg_latency{time / nRepeats};
     return avg_latency;
+}
+
+// Scratch buffers allocated with cudaMallocAsync come from the device's stream-ordered memory pool. By default the
+// pool hands unused memory back to the driver at every synchronization, and SpGEMM synchronizes a few
+// times per multiply, so every call would re-acquire its scratch memory from scratch. Letting the
+// pool keep it makes repeated multiplies reuse it; the cost is that the pool holds on to its peak size.
+inline void keep_pool_memory_between_calls() {
+    static const bool done = [] {
+        int device;
+        cudaMemPool_t pool;
+        CHECK_CUDA_ERROR(cudaGetDevice(&device));
+        CHECK_CUDA_ERROR(cudaDeviceGetDefaultMemPool(&pool, device));
+        uint64_t threshold = UINT64_MAX;
+        CHECK_CUDA_ERROR(cudaMemPoolSetAttribute(pool, cudaMemPoolAttrReleaseThreshold, &threshold));
+        return true;
+    }();
+    (void)done;
 }
 
 // Device-only helpers: this header is also included by host .cpp files.

@@ -12,13 +12,14 @@ namespace {
 // Some partials can land on same column and get added together
 // U[i] = sum over A(i,k) of nnz(B[k,:])
 // nnz(C[i,:]) <= cap[i] = min(U[i], N)
-__global__ void upper_bound_kernel(const CSRMatrix A, const CSRMatrix B, size_t* row_upper_bound) {
+template<typename View>
+__global__ void upper_bound_kernel(const View A, const View B, size_t* row_upper_bound) {
     size_t row = blockIdx.x * blockDim.x + threadIdx.x;
     if (row < A.num_rows) {
         size_t u = 0;
-        for (size_t p = A.row_ptr[row]; p < A.row_ptr[row + 1]; ++p) {
-            size_t k = A.col_indices[p];
-            u += B.row_ptr[k + 1] - B.row_ptr[k];
+        const size_t start = A.row_start(row);
+        for (size_t j = 0; j < A.row_length(row); ++j) {
+            u += B.row_length(A.col(start + j * A.stride(row)));
         }
         row_upper_bound[row] = min(u, B.num_cols);
     }
@@ -64,7 +65,8 @@ __global__ void bin_fill_kernel(const size_t* row_cap, size_t num_rows, size_t n
 
 } // namespace
 
-void compute_row_caps(const CSRMatrix& A, const CSRMatrix& B, size_t* row_cap, cudaStream_t stream) {
+template<typename View>
+void compute_row_caps(const View& A, const View& B, size_t* row_cap, cudaStream_t stream) {
     const unsigned grid = static_cast<unsigned>((A.num_rows + BLOCK_SIZE - 1) / BLOCK_SIZE);
     upper_bound_kernel<<<grid, BLOCK_SIZE, 0, stream>>>(A, B, row_cap);
     CHECK_LAST_CUDA_ERROR();
@@ -102,5 +104,7 @@ void bin_rows(const size_t* row_cap, size_t num_rows, size_t num_cols, size_t sh
     // The host copy of `info` must stay alive until the async copy above has run.
     CHECK_CUDA_ERROR(cudaStreamSynchronize(stream));
 }
+
+template void compute_row_caps<CsrView>(const CsrView&, const CsrView&, size_t*, cudaStream_t);
 
 } // namespace spgemm_detail

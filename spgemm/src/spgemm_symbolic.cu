@@ -10,9 +10,9 @@ namespace spgemm_detail {
 namespace {
 
 // RPB rows per block, TPR threads per row, one TABLE-slot shared hash table per row.
-template<int TABLE, int TPR, int RPB>
+template<int TABLE, int TPR, int RPB, typename View>
 __global__ void __launch_bounds__(TPR * RPB)
-symbolic_shared_hash_kernel(const CSRMatrix A, const CSRMatrix B, const int* rows, int num_rows, size_t* row_nnz) {
+symbolic_shared_hash_kernel(const View A, const View B, const int* rows, int num_rows, size_t* row_nnz) {
     constexpr int SUB = TPR < 32 ? TPR : 32;
     __shared__ int tables[RPB * TABLE];
     __shared__ int counts[RPB];
@@ -49,9 +49,9 @@ symbolic_shared_hash_kernel(const CSRMatrix A, const CSRMatrix B, const int* row
 
 // A block per row with a bitmap over all N columns: in shared memory (one block per row), or for
 // GLOBAL, in a per-block slice of global memory reused by persistent blocks.
-template<bool GLOBAL, int THREADS>
+template<bool GLOBAL, int THREADS, typename View>
 __global__ void __launch_bounds__(THREADS)
-symbolic_dense_kernel(const CSRMatrix A, const CSRMatrix B, const int* rows, int num_rows, size_t* row_nnz,
+symbolic_dense_kernel(const View A, const View B, const int* rows, int num_rows, size_t* row_nnz,
                       unsigned int* global_bitmaps) {
     using BlockReduce = cub::BlockReduce<int, THREADS>;
     __shared__ unsigned int shared_bitmap[GLOBAL ? 1 : DENSE_MAX_COLS / 32];
@@ -85,9 +85,9 @@ symbolic_dense_kernel(const CSRMatrix A, const CSRMatrix B, const int* rows, int
 
 // Persistent blocks, each reusing one hash table in global memory; a row only clears and probes
 // the first next_pow2(2 * cap) slots of it.
-template<int THREADS>
+template<int THREADS, typename View>
 __global__ void __launch_bounds__(THREADS)
-symbolic_global_hash_kernel(const CSRMatrix A, const CSRMatrix B, const int* rows, int num_rows,
+symbolic_global_hash_kernel(const View A, const View B, const int* rows, int num_rows,
                             const size_t* row_cap, size_t* row_nnz, int* tables, size_t table_stride) {
     __shared__ int count;
     int* keys = tables + blockIdx.x * table_stride;
@@ -116,8 +116,8 @@ symbolic_global_hash_kernel(const CSRMatrix A, const CSRMatrix B, const int* row
     }
 }
 
-template<int TABLE, int TPR, int RPB>
-void launch_symbolic_hash(const CSRMatrix& A, const CSRMatrix& B, const Bins& bins, int bin, size_t* row_nnz,
+template<int TABLE, int TPR, int RPB, typename View>
+void launch_symbolic_hash(const View& A, const View& B, const Bins& bins, int bin, size_t* row_nnz,
                           cudaStream_t stream) {
     const int n = bins.count(bin);
     if (n > 0) {
@@ -135,7 +135,8 @@ void launch_symbolic_hash(const CSRMatrix& A, const CSRMatrix& B, const Bins& bi
 // Bin [10] --> Global dense hash table
 // Bin [11] --> Global hash table
 
-void symbolic_phase(const CSRMatrix& A, const CSRMatrix& B, const size_t* row_cap, const Bins& bins,
+template<typename View>
+void symbolic_phase(const View& A, const View& B, const size_t* row_cap, const Bins& bins,
                     size_t* row_nnz, cudaStream_t stream) {
 
     // Bin [1-8] --> Shared memory hash table
@@ -180,5 +181,7 @@ void symbolic_phase(const CSRMatrix& A, const CSRMatrix& B, const size_t* row_ca
         CHECK_CUDA_ERROR(cudaFreeAsync(tables, stream));
     }
 }
+
+template void symbolic_phase<CsrView>(const CsrView&, const CsrView&, const size_t*, const Bins&, size_t*, cudaStream_t);
 
 } // namespace spgemm_detail

@@ -12,28 +12,35 @@
 namespace spgemm_detail {
 
 // Visits every partial product of row `row` of A*B. Sub-groups of `sub_size` threads take different
-// nonzeros A(row,k); lanes inside a sub-group stride over row k of B so its reads are coalesced.
+// nonzeros A(row,k); lanes inside a sub-group stride over row k of B so its reads are coalesced
+// (for CSR; see spgemm_views.cuh for how rows of other formats are laid out).
 // Symbolic phase: with_values false, counting only unique columns and adding to a hash table
 // Numeric phase: with_values true, accumulating values in a hash table
 // UNROLL > 1 makes each lane load UNROLL entries of B's row before handing any of them to f, so the
 // loads are in flight together instead of each waiting on the previous one (helps latency-bound kernels).
-template<bool WITH_VALUES, int UNROLL = 1, typename F>
-__device__ inline void for_each_product(const CSRMatrix& A, const CSRMatrix& B, size_t row, int sub_id, int num_subs,
+template<bool WITH_VALUES, int UNROLL = 1, typename View, typename F>
+__device__ inline void for_each_product(const View& A, const View& B, size_t row, int sub_id, int num_subs,
                                         int sub_lane, int sub_size, F&& f) {
-    for (size_t p = A.row_ptr[row] + sub_id; p < A.row_ptr[row + 1]; p += num_subs) {
-        size_t k = A.col_indices[p];
-        float a = WITH_VALUES ? A.values[p] : 0.0f;
-        const size_t end = B.row_ptr[k + 1];
-        size_t q = B.row_ptr[k] + sub_lane;
+    const size_t a_start = A.row_start(row);
+    const size_t a_stride = A.stride(row);
+    const size_t a_length = A.row_length(row);
+    for (size_t j = sub_id; j < a_length; j += num_subs) {
+        const size_t p = a_start + j * a_stride;
+        size_t k = A.col(p);
+        float a = WITH_VALUES ? A.value(p) : 0.0f;
+        const size_t b_start = B.row_start(k);
+        const size_t step = sub_size * B.stride(k);
+        const size_t end = b_start + B.row_length(k) * B.stride(k);
+        size_t q = b_start + sub_lane * B.stride(k);
 
-        for (; q + (UNROLL - 1) * sub_size < end; q += UNROLL * sub_size) {
+        for (; q + (UNROLL - 1) * step < end; q += UNROLL * step) {
             size_t cols[UNROLL];
             float vals[UNROLL];
 #pragma unroll
             for (int u = 0; u < UNROLL; ++u) {
-                cols[u] = B.col_indices[q + u * sub_size];
+                cols[u] = B.col(q + u * step);
                 if constexpr (WITH_VALUES) {
-                    vals[u] = B.values[q + u * sub_size];
+                    vals[u] = B.value(q + u * step);
                 }
             }
 #pragma unroll
@@ -45,11 +52,11 @@ __device__ inline void for_each_product(const CSRMatrix& A, const CSRMatrix& B, 
                 }
             }
         }
-        for (; q < end; q += sub_size) {
+        for (; q < end; q += step) {
             if constexpr (WITH_VALUES) {
-                f(B.col_indices[q], a * B.values[q]);
+                f(B.col(q), a * B.value(q));
             } else {
-                f(B.col_indices[q]);
+                f(B.col(q));
             }
         }
     }

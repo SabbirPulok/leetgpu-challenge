@@ -6,6 +6,7 @@
 #include <cuda_runtime.h>
 #include <sparse_format.hpp>
 #include <spgemm_config.cuh>
+#include <spgemm_views.cuh>
 
 namespace spgemm_detail {
 
@@ -23,7 +24,8 @@ struct Bins {
 };
 
 // row_cap[i] = min(sum over A(i,k) of nnz(B[k,:]), N): an upper bound on nnz(C[i,:]).
-void compute_row_caps(const CSRMatrix& A, const CSRMatrix& B, size_t* row_cap, cudaStream_t stream);
+template<typename View>
+void compute_row_caps(const View& A, const View& B, size_t* row_cap, cudaStream_t stream);
 
 // Groups rows by choose_bin(row_cap[row]) into bins.rows (M entries, allocated by the caller).
 // d_bin_info is BIN_INFO_SIZE entries of device scratch. Needs one host round trip.

@@ -69,9 +69,11 @@ cusparseSpMatDescr_t describe(const DeviceCsr32& d) {
     return mat;
 }
 
-// The full cusparseSpGEMM sequence, including allocation of C: what a caller pays per multiply.
+// The full cusparseSpGEMM sequence, including allocation of C: what a caller pays per multiply. Work
+// buffers come from the same stream-ordered pool as our implementation's scratch space, so both
+// sides get the same allocation cost.
 DeviceCsr32 cusparse_multiply(cusparseHandle_t handle, cusparseSpMatDescr_t mat_a, cusparseSpMatDescr_t mat_b,
-                              int num_rows, int num_cols) {
+                              int num_rows, int num_cols, cudaStream_t stream) {
     const float alpha = 1.0f, beta = 0.0f;
     const cusparseOperation_t op = CUSPARSE_OPERATION_NON_TRANSPOSE;
     const cusparseSpGEMMAlg_t alg = CUSPARSE_SPGEMM_DEFAULT;
@@ -91,12 +93,12 @@ DeviceCsr32 cusparse_multiply(cusparseHandle_t handle, cusparseSpMatDescr_t mat_
     void *buffer1 = nullptr, *buffer2 = nullptr;
     CHECK_CUSPARSE(cusparseSpGEMM_workEstimation(handle, op, op, &alpha, mat_a, mat_b, &beta, mat_c, CUDA_R_32F, alg,
                                                  desc, &buffer1_size, nullptr));
-    CHECK_CUDA_ERROR(cudaMalloc(&buffer1, buffer1_size));
+    CHECK_CUDA_ERROR(cudaMallocAsync(&buffer1, buffer1_size, stream));
     CHECK_CUSPARSE(cusparseSpGEMM_workEstimation(handle, op, op, &alpha, mat_a, mat_b, &beta, mat_c, CUDA_R_32F, alg,
                                                  desc, &buffer1_size, buffer1));
     CHECK_CUSPARSE(cusparseSpGEMM_compute(handle, op, op, &alpha, mat_a, mat_b, &beta, mat_c, CUDA_R_32F, alg, desc,
                                           &buffer2_size, nullptr));
-    CHECK_CUDA_ERROR(cudaMalloc(&buffer2, buffer2_size));
+    CHECK_CUDA_ERROR(cudaMallocAsync(&buffer2, buffer2_size, stream));
     CHECK_CUSPARSE(cusparseSpGEMM_compute(handle, op, op, &alpha, mat_a, mat_b, &beta, mat_c, CUDA_R_32F, alg, desc,
                                           &buffer2_size, buffer2));
 
@@ -109,8 +111,8 @@ DeviceCsr32 cusparse_multiply(cusparseHandle_t handle, cusparseSpMatDescr_t mat_
 
     CHECK_CUSPARSE(cusparseSpGEMM_destroyDescr(desc));
     CHECK_CUSPARSE(cusparseDestroySpMat(mat_c));
-    CHECK_CUDA_ERROR(cudaFree(buffer1));
-    CHECK_CUDA_ERROR(cudaFree(buffer2));
+    CHECK_CUDA_ERROR(cudaFreeAsync(buffer1, stream));
+    CHECK_CUDA_ERROR(cudaFreeAsync(buffer2, stream));
     return c;
 }
 
@@ -157,13 +159,14 @@ void launch_cusparse_spgemm(const CSRMatrix& matrix_a, const CSRMatrix& matrix_b
     cusparseSpMatDescr_t mat_a = describe(a);
     cusparseSpMatDescr_t mat_b = describe(b);
 
-    DeviceCsr32 c = cusparse_multiply(handle, mat_a, mat_b, a.num_rows, b.num_cols);
+    keep_pool_memory_between_calls();
+    DeviceCsr32 c = cusparse_multiply(handle, mat_a, mat_b, a.num_rows, b.num_cols, stream);
     CHECK_CUDA_ERROR(cudaStreamSynchronize(stream));
     download_csr32(c, matrix_c);
     free_csr32(c);
 
     std::function<void(cudaStream_t)> const bound_multiply = [&](cudaStream_t) {
-        DeviceCsr32 tmp = cusparse_multiply(handle, mat_a, mat_b, a.num_rows, b.num_cols);
+        DeviceCsr32 tmp = cusparse_multiply(handle, mat_a, mat_b, a.num_rows, b.num_cols, stream);
         free_csr32(tmp);
     };
     float latency {measure_performance(bound_multiply, stream, REPEAT_COUNT, WARMUP_COUNT)};

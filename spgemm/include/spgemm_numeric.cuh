@@ -8,8 +8,11 @@
 
 namespace spgemm_detail {
 
-// Fills C.col_indices and C.values (sorted by column within each row). C.row_ptr must already hold
-// the exact row offsets, and `bins` must come from bin_rows(row_nnz, ..., NUMERIC_SHARED_MAX, ...).
-void numeric_phase(const CSRMatrix& A, const CSRMatrix& B, CSRMatrix& C, const Bins& bins, cudaStream_t stream);
+// Writes every row of C through the layout C, sorted by column. row_nnz[r] = nnz(C[r, :]) from the
+// symbolic phase, the layout must already have room for each row, and `bins` must come from
+// bin_rows(row_nnz, ..., NUMERIC_SHARED_MAX, ...).
+template<typename View, typename Layout>
+void numeric_phase(const View& A, const View& B, const Layout& C, const size_t* row_nnz, const Bins& bins,
+                   cudaStream_t stream);
 
 } // namespace spgemm_detail

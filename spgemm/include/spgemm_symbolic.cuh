@@ -11,7 +11,8 @@ namespace spgemm_detail {
 
 // Sets row_nnz[row] = nnz(C[row, :]) for every non-empty row; empty rows are left untouched.
 // `bins` must come from bin_rows(row_cap, ..., SYMBOLIC_SHARED_MAX, ...).
-void symbolic_phase(const CSRMatrix& A, const CSRMatrix& B, const size_t* row_cap, const Bins& bins,
+template<typename View>
+void symbolic_phase(const View& A, const View& B, const size_t* row_cap, const Bins& bins,
                     size_t* row_nnz, cudaStream_t stream);
 
 } // namespace spgemm_detail

@@ -36,6 +36,7 @@ using namespace spgemm_detail;
 void spgemm_device(const CSRMatrix& A, const CSRMatrix& B, CSRMatrix& C, cudaStream_t stream) {
     const size_t M = A.num_rows;
     const size_t N = B.num_cols;
+    keep_pool_memory_between_calls();
 
     size_t *row_cap, *row_nnz;
     unsigned long long* bin_info;
@@ -46,13 +47,15 @@ void spgemm_device(const CSRMatrix& A, const CSRMatrix& B, CSRMatrix& C, cudaStr
     CHECK_CUDA_ERROR(cudaMallocAsync(&bin_info, BIN_INFO_SIZE * sizeof(unsigned long long), stream));
 
     // 1. Upper bound per row C
-    compute_row_caps(A, B, row_cap, stream);
+    const CsrView a = view_of(A);
+    const CsrView b = view_of(B);
+    compute_row_caps(a, b, row_cap, stream);
 
     // 2. Symbolic phase. Empty rows are never launched, so their count stays 0 from this memset;
     //    row_nnz[M] = 0 makes the exclusive scan below end with nnz(C).
     CHECK_CUDA_ERROR(cudaMemsetAsync(row_nnz, 0, (M + 1) * sizeof(size_t), stream));
     bin_rows(row_cap, M, N, SYMBOLIC_SHARED_MAX, bin_info, bins, stream);
-    symbolic_phase(A, B, row_cap, bins, row_nnz, stream);
+    symbolic_phase(a, b, row_cap, bins, row_nnz, stream);
 
     // 3. Scan into C.row_ptr and allocate C exactly
     C.num_rows = M;
@@ -75,7 +78,7 @@ void spgemm_device(const CSRMatrix& A, const CSRMatrix& B, CSRMatrix& C, cudaStr
 
         // 4. Numeric phase, binned by the exact row sizes
         bin_rows(row_nnz, M, N, NUMERIC_SHARED_MAX, bin_info, bins, stream);
-        numeric_phase(A, B, C, bins, stream);
+        numeric_phase(a, b, layout_of(C), row_nnz, bins, stream);
     }
 
     CHECK_CUDA_ERROR(cudaFreeAsync(row_cap, stream));
