@@ -46,13 +46,14 @@ symbolic_shared_hash_kernel(const CSRMatrix A, const CSRMatrix B, const int* row
     }
 }
 
+
 // A block per row with a bitmap over all N columns: in shared memory (one block per row), or for
 // GLOBAL, in a per-block slice of global memory reused by persistent blocks.
-template<bool GLOBAL>
-__global__ void __launch_bounds__(BLOCK_SIZE)
+template<bool GLOBAL, int THREADS>
+__global__ void __launch_bounds__(THREADS)
 symbolic_dense_kernel(const CSRMatrix A, const CSRMatrix B, const int* rows, int num_rows, size_t* row_nnz,
                       unsigned int* global_bitmaps) {
-    using BlockReduce = cub::BlockReduce<int, BLOCK_SIZE>;
+    using BlockReduce = cub::BlockReduce<int, THREADS>;
     __shared__ unsigned int shared_bitmap[GLOBAL ? 1 : DENSE_MAX_COLS / 32];
     __shared__ typename BlockReduce::TempStorage reduce_storage;
 
@@ -61,21 +62,20 @@ symbolic_dense_kernel(const CSRMatrix A, const CSRMatrix B, const int* rows, int
 
     for (int idx = blockIdx.x; idx < num_rows; idx += gridDim.x) {
         const int row = rows[idx];
-        for (int w = threadIdx.x; w < num_words; w += BLOCK_SIZE) {
-            bitmap[w] = 0;
-        }
+        block_fill<THREADS>(bitmap, num_words, 0u);
         __syncthreads();
 
-        for_each_product<false>(A, B, row, threadIdx.x / 32, BLOCK_SIZE / 32, threadIdx.x % 32, 32, [&](size_t col) {
+        for_each_product<false, GLOBAL ? GLOBAL_UNROLL : 1>(A, B, row, threadIdx.x / 32, THREADS / 32, threadIdx.x % 32, 32, [&](size_t col) {
             atomicOr(&bitmap[col / 32], 1u << (col % 32));
         });
         __syncthreads();
 
         int count = 0;
-        for (int w = threadIdx.x; w < num_words; w += BLOCK_SIZE) {
+        for (int w = threadIdx.x; w < num_words; w += THREADS) {
             count += __popc(bitmap[w]);
         }
-        count = BlockReduce(reduce_storage).Sum(count);
+        //count = BlockReduce(reduce_storage).Sum(count);
+        block_reduce_sum<THREADS>(count);
         if (threadIdx.x == 0) {
             row_nnz[row] = count;
         }
@@ -85,7 +85,8 @@ symbolic_dense_kernel(const CSRMatrix A, const CSRMatrix B, const int* rows, int
 
 // Persistent blocks, each reusing one hash table in global memory; a row only clears and probes
 // the first next_pow2(2 * cap) slots of it.
-__global__ void __launch_bounds__(BLOCK_SIZE)
+template<int THREADS>
+__global__ void __launch_bounds__(THREADS)
 symbolic_global_hash_kernel(const CSRMatrix A, const CSRMatrix B, const int* rows, int num_rows,
                             const size_t* row_cap, size_t* row_nnz, int* tables, size_t table_stride) {
     __shared__ int count;
@@ -94,16 +95,14 @@ symbolic_global_hash_kernel(const CSRMatrix A, const CSRMatrix B, const int* row
     for (int idx = blockIdx.x; idx < num_rows; idx += gridDim.x) {
         const int row = rows[idx];
         const size_t size = next_pow2(2 * row_cap[row]);
-        for (size_t i = threadIdx.x; i < size; i += BLOCK_SIZE) {
-            keys[i] = EMPTY_KEY;
-        }
+        block_fill<THREADS>(keys, size, EMPTY_KEY);
         if (threadIdx.x == 0) {
             count = 0;
         }
         __syncthreads();
 
         int inserted = 0;
-        for_each_product<false>(A, B, row, threadIdx.x / 32, BLOCK_SIZE / 32, threadIdx.x % 32, 32, [&](size_t col) {
+        for_each_product<false>(A, B, row, threadIdx.x / 32, THREADS / 32, threadIdx.x % 32, 32, [&](size_t col) {
             inserted += hash_insert(keys, static_cast<unsigned>(size - 1), static_cast<int>(col));
         });
         if (inserted) {
@@ -130,8 +129,19 @@ void launch_symbolic_hash(const CSRMatrix& A, const CSRMatrix& B, const Bins& bi
 
 } // namespace
 
+//symbolic phase dispatcher
+// Bins [1-8] --> Shared memory hash table
+// Bin [9] --> Dense hash table (shared memory bitmap)
+// Bin [10] --> Global dense hash table
+// Bin [11] --> Global hash table
+
 void symbolic_phase(const CSRMatrix& A, const CSRMatrix& B, const size_t* row_cap, const Bins& bins,
                     size_t* row_nnz, cudaStream_t stream) {
+
+    // Bin [1-8] --> Shared memory hash table
+    // launch_symbolic_hash<hash table capacity in smem, TPR, RPB>(A, B, bins, bin_id, row_nnz, stream);
+    // TPR: threads per row, RPB: rows per block
+
     launch_symbolic_hash<64, 8, 32>(A, B, bins, 1, row_nnz, stream);
     launch_symbolic_hash<128, 16, 16>(A, B, bins, 2, row_nnz, stream);
     launch_symbolic_hash<256, 32, 8>(A, B, bins, 3, row_nnz, stream);
@@ -143,7 +153,7 @@ void symbolic_phase(const CSRMatrix& A, const CSRMatrix& B, const size_t* row_ca
 
     if (bins.count(BIN_DENSE) > 0) {
         const int n = bins.count(BIN_DENSE);
-        symbolic_dense_kernel<false><<<n, BLOCK_SIZE, 0, stream>>>(A, B, bins.rows_of(BIN_DENSE), n, row_nnz, nullptr);
+        symbolic_dense_kernel<false, BLOCK_SIZE><<<n, BLOCK_SIZE, 0, stream>>>(A, B, bins.rows_of(BIN_DENSE), n, row_nnz, nullptr);
         CHECK_LAST_CUDA_ERROR();
     }
 
@@ -152,7 +162,7 @@ void symbolic_phase(const CSRMatrix& A, const CSRMatrix& B, const size_t* row_ca
         const int grid = persistent_grid_size(n);
         unsigned int* bitmaps;
         CHECK_CUDA_ERROR(cudaMallocAsync(&bitmaps, grid * ((B.num_cols + 31) / 32) * sizeof(unsigned int), stream));
-        symbolic_dense_kernel<true><<<grid, BLOCK_SIZE, 0, stream>>>(A, B, bins.rows_of(BIN_GLOBAL_DENSE), n, row_nnz,
+        symbolic_dense_kernel<true, GLOBAL_BLOCK_SIZE><<<grid, GLOBAL_BLOCK_SIZE, 0, stream>>>(A, B, bins.rows_of(BIN_GLOBAL_DENSE), n, row_nnz,
                                                                      bitmaps);
         CHECK_LAST_CUDA_ERROR();
         CHECK_CUDA_ERROR(cudaFreeAsync(bitmaps, stream));
@@ -164,7 +174,7 @@ void symbolic_phase(const CSRMatrix& A, const CSRMatrix& B, const size_t* row_ca
         const size_t stride = next_pow2(2 * bins.global_max_cap);
         int* tables;
         CHECK_CUDA_ERROR(cudaMallocAsync(&tables, grid * stride * sizeof(int), stream));
-        symbolic_global_hash_kernel<<<grid, BLOCK_SIZE, 0, stream>>>(A, B, bins.rows_of(BIN_GLOBAL), n, row_cap,
+        symbolic_global_hash_kernel<GLOBAL_BLOCK_SIZE><<<grid, GLOBAL_BLOCK_SIZE, 0, stream>>>(A, B, bins.rows_of(BIN_GLOBAL), n, row_cap,
                                                                      row_nnz, tables, stride);
         CHECK_LAST_CUDA_ERROR();
         CHECK_CUDA_ERROR(cudaFreeAsync(tables, stream));

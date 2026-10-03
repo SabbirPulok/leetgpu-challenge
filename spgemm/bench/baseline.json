@@ -1,0 +1,38 @@
+{
+  "commit": "c42053f-dirty",
+  "gpu": "NVIDIA GeForce RTX 4090",
+  "date": "2026-10-03T12:10:44",
+  "runs": 5,
+  "cases": {
+    "1024^2, 10%: dense accumulator": {
+      "ok": true,
+      "spgemm": 0.578,
+      "cuSPARSE": 5.278
+    },
+    "16384^2, 0.1%: small shared hash bins": {
+      "ok": true,
+      "spgemm": 3.438,
+      "cuSPARSE": 3.371
+    },
+    "8192^2, 0.02%: mostly empty and tiny rows": {
+      "ok": true,
+      "spgemm": 0.088,
+      "cuSPARSE": 0.161
+    },
+    "4096x2048 * 2048x32768: large shared hash bins": {
+      "ok": true,
+      "spgemm": 4.41,
+      "cuSPARSE": 4.79
+    },
+    "256x8192 * 8192x65536: global-memory dense": {
+      "ok": true,
+      "spgemm": 10.28,
+      "cuSPARSE": 14.891
+    },
+    "256x2048 * 2048x262144: global-memory hash": {
+      "ok": true,
+      "spgemm": 3.036,
+      "cuSPARSE": 1.553
+    }
+  }
+}

@@ -54,3 +54,10 @@ So each row assigned a bin and each bin gets it's own kernel config. bin_rows es
 
 
 
+
+To compare performance against the saved baseline (`bench/baseline.json`):
+
+```bash
+python3 scripts/bench.py --runs 3          # compare
+python3 scripts/bench.py --save-baseline   # record the current build as the new baseline
+```

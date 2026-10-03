@@ -1,3 +1,0 @@
-/home/sabbir/Documents/Sabbir/Research/leetgpu-challenge/spgemm/build/CMakeFiles/spgemm_nvcuda.dir
-/home/sabbir/Documents/Sabbir/Research/leetgpu-challenge/spgemm/build/CMakeFiles/edit_cache.dir
-/home/sabbir/Documents/Sabbir/Research/leetgpu-challenge/spgemm/build/CMakeFiles/rebuild_cache.dir

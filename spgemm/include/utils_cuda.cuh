@@ -55,3 +55,40 @@ float inline measure_performance(std::function<T(cudaStream_t)> bound_function, 
     return avg_latency;
 }
 
+// Device-only helpers: this header is also included by host .cpp files.
+#ifdef __CUDACC__
+
+template<typename T>
+__device__ __forceinline__ void warp_reduce_sum(T& sum) {
+    #pragma unroll
+    for (int offset = warpSize / 2; offset > 0; offset /= 2) {
+        sum += __shfl_down_sync(0xFFFFFFFF, sum, offset);
+    }
+}
+
+template<int BLOCK_SIZE, typename T>
+__device__ void block_reduce_sum(T& sum) {
+
+    constexpr int NUM_WARPS = (BLOCK_SIZE + 31) / 32;
+    __shared__ T warp_sums[32];
+
+    const int lane = threadIdx.x & 31;
+    const int warpId = threadIdx.x >> 5;
+
+    warp_reduce_sum(sum);
+    
+    if(lane == 0)
+    {
+        warp_sums[warpId] = sum;
+    }
+    __syncthreads();
+
+    if(warpId == 0)
+    {
+        sum = (lane < NUM_WARPS) ? warp_sums[lane] : 0;
+        warp_reduce_sum(sum);
+    }
+    __syncthreads();
+}
+
+#endif // __CUDACC__

@@ -22,6 +22,12 @@ constexpr size_t SYMBOLIC_SHARED_MAX = 4096; // 8192-slot int table = 32 KB
 constexpr size_t NUMERIC_SHARED_MAX = 2048;  // 4096-slot int + float table = 32 KB
 constexpr size_t DENSE_MAX_COLS = 8192;      // 8192 floats + 8192-bit bitmap = 33 KB
 constexpr int BLOCK_SIZE = 256;
+// Kernels that keep scratch space in global memory run one row per block on a small persistent
+// grid, so they use larger blocks to have enough warps in flight to hide global-memory latency.
+constexpr int GLOBAL_BLOCK_SIZE = 1024;
+// Entries of B each lane loads at once in the global dense kernels (see for_each_product). Measured:
+// helps the dense kernels by 13-18%, not the global hash kernels, which therefore do not use it.
+constexpr int GLOBAL_UNROLL = 4;
 constexpr int EMPTY_KEY = -1;
 
 __host__ __device__ inline size_t next_pow2(size_t x) {
@@ -32,9 +38,12 @@ __host__ __device__ inline size_t next_pow2(size_t x) {
     return p;
 }
 
-// Hash tables are kept at load factor <= 0.5. A row goes dense when its hash table would be at
-// least as large as a dense array over all N columns (the spECK criterion), or when it would not
-// fit in shared memory but a dense array would.
+// Check each row's upper bounds and assigns most resource-effcient accumulator type and memory space.
+// Dense vs Sparse Criterion (spECK)
+//      Open addressing hash tables maintain a load factor <= 0.5 to minimize collision chains
+// If next_pow2(2 * cap) >= num_cols, a hash tables requires more memory than a flat array/bitmap
+// Shared Memory Dense Accumulator: Kernel used shared memory to store dense accumulator
+
 __host__ __device__ inline int choose_bin(size_t cap, size_t num_cols, size_t shared_max) {
     if (cap == 0) {
         return BIN_EMPTY;

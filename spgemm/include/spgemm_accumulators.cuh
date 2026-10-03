@@ -4,6 +4,8 @@
 // products, and a concurrent linear-probing hash table (in shared or global memory).
 
 #include <cstddef>
+#include <cstdint>
+#include <cstring>
 #include <sparse_format.hpp>
 #include <spgemm_config.cuh>
 
@@ -11,19 +13,71 @@ namespace spgemm_detail {
 
 // Visits every partial product of row `row` of A*B. Sub-groups of `sub_size` threads take different
 // nonzeros A(row,k); lanes inside a sub-group stride over row k of B so its reads are coalesced.
-template<bool WITH_VALUES, typename F>
+// Symbolic phase: with_values false, counting only unique columns and adding to a hash table
+// Numeric phase: with_values true, accumulating values in a hash table
+// UNROLL > 1 makes each lane load UNROLL entries of B's row before handing any of them to f, so the
+// loads are in flight together instead of each waiting on the previous one (helps latency-bound kernels).
+template<bool WITH_VALUES, int UNROLL = 1, typename F>
 __device__ inline void for_each_product(const CSRMatrix& A, const CSRMatrix& B, size_t row, int sub_id, int num_subs,
                                         int sub_lane, int sub_size, F&& f) {
     for (size_t p = A.row_ptr[row] + sub_id; p < A.row_ptr[row + 1]; p += num_subs) {
         size_t k = A.col_indices[p];
         float a = WITH_VALUES ? A.values[p] : 0.0f;
-        for (size_t q = B.row_ptr[k] + sub_lane; q < B.row_ptr[k + 1]; q += sub_size) {
+        const size_t end = B.row_ptr[k + 1];
+        size_t q = B.row_ptr[k] + sub_lane;
+
+        for (; q + (UNROLL - 1) * sub_size < end; q += UNROLL * sub_size) {
+            size_t cols[UNROLL];
+            float vals[UNROLL];
+#pragma unroll
+            for (int u = 0; u < UNROLL; ++u) {
+                cols[u] = B.col_indices[q + u * sub_size];
+                if constexpr (WITH_VALUES) {
+                    vals[u] = B.values[q + u * sub_size];
+                }
+            }
+#pragma unroll
+            for (int u = 0; u < UNROLL; ++u) {
+                if constexpr (WITH_VALUES) {
+                    f(cols[u], a * vals[u]);
+                } else {
+                    f(cols[u]);
+                }
+            }
+        }
+        for (; q < end; q += sub_size) {
             if constexpr (WITH_VALUES) {
                 f(B.col_indices[q], a * B.values[q]);
             } else {
                 f(B.col_indices[q]);
             }
         }
+    }
+}
+
+// Sets p[0, n) to `value` using all THREADS threads of the block. The part of the range that is
+// 16-byte aligned is written with 128-bit stores (4 elements per instruction); the unaligned head
+// and the leftover tail are written one element at a time.
+template<int THREADS, typename T>
+__device__ inline void block_fill(T* p, size_t n, T value) {
+    static_assert(sizeof(T) == 4, "block_fill handles 4-byte element types");
+    unsigned int bits;
+    memcpy(&bits, &value, sizeof(bits));
+    const uint4 v4 = make_uint4(bits, bits, bits, bits);
+
+    const size_t misalign = reinterpret_cast<uintptr_t>(p) % 16;
+    const size_t head = min(n, misalign ? (16 - misalign) / sizeof(T) : size_t{0});
+    const size_t n4 = (n - head) / 4;
+    uint4* p4 = reinterpret_cast<uint4*>(p + head);
+
+    for (size_t i = threadIdx.x; i < head; i += THREADS) {
+        p[i] = value;
+    }
+    for (size_t i = threadIdx.x; i < n4; i += THREADS) {
+        p4[i] = v4;
+    }
+    for (size_t i = head + 4 * n4 + threadIdx.x; i < n; i += THREADS) {
+        p[i] = value;
     }
 }
 

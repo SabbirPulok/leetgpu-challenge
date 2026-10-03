@@ -1,3 +1,4 @@
+#include <climits>
 #include <type_traits>
 #include <cuda_runtime.h>
 #include <cub/cub.cuh>
@@ -14,8 +15,8 @@ struct NoBlockSort {
     struct TempStorage {};
 };
 
-// Output is sorted by rank counting (O(TABLE^2 / TPR) per row) when several rows share a block,
-// and by a block-wide radix sort when a block owns one large row.
+// Output is sorted by rank counting over the compacted keys when several rows share a block, and by
+// a block-wide radix sort when a block owns one large row.
 template<int TABLE, int TPR, int RPB>
 __global__ void __launch_bounds__(TPR * RPB)
 numeric_shared_hash_kernel(const CSRMatrix A, const CSRMatrix B, CSRMatrix C, const int* rows, int num_rows) {
@@ -27,10 +28,12 @@ numeric_shared_hash_kernel(const CSRMatrix A, const CSRMatrix B, CSRMatrix C, co
         float vals[RPB * TABLE];
     };
     // The sort's scratch space reuses the tables once they have been read into registers.
-    __shared__ union {
+    // 16-byte aligned so each row's keys can be read as int4.
+    __shared__ alignas(16) union {
         Tables tables;
         typename BlockSort::TempStorage sort;
     } storage;
+    __shared__ int counts[RPB];
 
     const int group = threadIdx.x / TPR;
     const int lane = threadIdx.x % TPR;
@@ -75,21 +78,69 @@ numeric_shared_hash_kernel(const CSRMatrix A, const CSRMatrix B, CSRMatrix C, co
                 C.values[row_start + threadIdx.x * ITEMS + i] = v[i];
             }
         }
-    } else if (idx < num_rows) {
-        // Keys are distinct, so each key's rank among the row's keys is its position in sorted
-        // order. EMPTY_KEY (-1) compares as UINT_MAX unsigned, so empty slots never count.
-        const size_t row_start = C.row_ptr[rows[idx]];
-        for (int i = lane; i < TABLE; i += TPR) {
-            const int key = keys[i];
-            if (key == EMPTY_KEY) {
-                continue;
+    } else {
+        // 1. Compact the row's occupied slots to the front of its table. Every slot is read into
+        //    registers before any is overwritten, so the order of the writes does not matter.
+        int slot_keys[ITEMS];
+        float slot_vals[ITEMS];
+        for (int i = 0; i < ITEMS; ++i) {
+            slot_keys[i] = keys[i * TPR + lane];
+            slot_vals[i] = vals[i * TPR + lane];
+        }
+        if (lane == 0) {
+            counts[group] = 0;
+        }
+        __syncthreads();
+        for (int i = 0; i < ITEMS; ++i) {
+            if (slot_keys[i] != EMPTY_KEY) {
+                const int pos = atomicAdd(&counts[group], 1);
+                keys[pos] = slot_keys[i];
+                vals[pos] = slot_vals[i];
             }
-            int rank = 0;
-            for (int j = 0; j < TABLE; ++j) {
-                rank += static_cast<unsigned>(keys[j]) < static_cast<unsigned>(key);
+        }
+        __syncthreads();
+
+        // 2. Pad to a multiple of 4 with EMPTY_KEY so the keys can be read 4 at a time below.
+        //    Rows are binned by exact size, so n <= TABLE / 2 and the padding stays in the table.
+        const int n = counts[group];
+        const int n_padded = (n + 3) & ~3;
+        if (lane < n_padded - n) {
+            keys[n + lane] = EMPTY_KEY;
+        }
+        __syncthreads();
+
+        // 3. Keys are distinct, so a key's rank among the row's keys is its position in sorted order.
+        //    Each thread keeps its compacted entries (at most ITEMS / 2, since n <= TABLE / 2) in
+        //    registers and makes one pass over the keys with 16-byte loads. EMPTY_KEY padding compares
+        //    as UINT_MAX unsigned, so it never counts.
+        constexpr int MINE = ITEMS / 2;
+        unsigned int my_keys[MINE];
+        float my_vals[MINE];
+        int rank[MINE];
+        for (int m = 0; m < MINE; ++m) {
+            const int e = lane + m * TPR;
+            my_keys[m] = e < n ? static_cast<unsigned int>(keys[e]) : UINT_MAX;
+            my_vals[m] = e < n ? vals[e] : 0.0f;
+            rank[m] = 0;
+        }
+        const int4* keys4 = reinterpret_cast<const int4*>(keys);
+        for (int j = 0; j < n_padded / 4; ++j) {
+            const int4 q = keys4[j];
+#pragma unroll
+            for (int m = 0; m < MINE; ++m) {
+                rank[m] += (static_cast<unsigned int>(q.x) < my_keys[m]) + (static_cast<unsigned int>(q.y) < my_keys[m]) +
+                           (static_cast<unsigned int>(q.z) < my_keys[m]) + (static_cast<unsigned int>(q.w) < my_keys[m]);
             }
-            C.col_indices[row_start + rank] = key;
-            C.values[row_start + rank] = vals[i];
+        }
+
+        if (idx < num_rows) {
+            const size_t row_start = C.row_ptr[rows[idx]];
+            for (int m = 0; m < MINE; ++m) {
+                if (lane + m * TPR < n) {
+                    C.col_indices[row_start + rank[m]] = my_keys[m];
+                    C.values[row_start + rank[m]] = my_vals[m];
+                }
+            }
         }
     }
 }
@@ -97,11 +148,11 @@ numeric_shared_hash_kernel(const CSRMatrix A, const CSRMatrix B, CSRMatrix C, co
 // A block per row with a dense value array over all N columns plus a bitmap of which are set;
 // walking the bitmap in order yields sorted output. Shared memory, or for GLOBAL, per-block
 // slices of global memory reused by persistent blocks.
-template<bool GLOBAL>
-__global__ void __launch_bounds__(BLOCK_SIZE)
+template<bool GLOBAL, int THREADS>
+__global__ void __launch_bounds__(THREADS)
 numeric_dense_kernel(const CSRMatrix A, const CSRMatrix B, CSRMatrix C, const int* rows, int num_rows,
                      float* global_accs, unsigned int* global_bitmaps) {
-    using BlockScan = cub::BlockScan<int, BLOCK_SIZE>;
+    using BlockScan = cub::BlockScan<int, THREADS>;
     __shared__ float shared_acc[GLOBAL ? 1 : DENSE_MAX_COLS];
     __shared__ unsigned int shared_bitmap[GLOBAL ? 1 : DENSE_MAX_COLS / 32];
     __shared__ typename BlockScan::TempStorage scan_storage;
@@ -114,22 +165,18 @@ numeric_dense_kernel(const CSRMatrix A, const CSRMatrix B, CSRMatrix C, const in
     for (int idx = blockIdx.x; idx < num_rows; idx += gridDim.x) {
         const int row = rows[idx];
 
-        for (int c = threadIdx.x; c < num_cols; c += BLOCK_SIZE) {
-            acc[c] = 0.0f;
-        }
-        for (int w = threadIdx.x; w < num_words; w += BLOCK_SIZE) {
-            bitmap[w] = 0;
-        }
+        block_fill<THREADS>(acc, num_cols, 0.0f);
+        block_fill<THREADS>(bitmap, num_words, 0u);
         __syncthreads();
 
-        for_each_product<true>(A, B, row, threadIdx.x / 32, BLOCK_SIZE / 32, threadIdx.x % 32, 32, [&](size_t col, float v) {
+        for_each_product<true, GLOBAL ? GLOBAL_UNROLL : 1>(A, B, row, threadIdx.x / 32, THREADS / 32, threadIdx.x % 32, 32, [&](size_t col, float v) {
             atomicAdd(&acc[col], v);
             atomicOr(&bitmap[col / 32], 1u << (col % 32));
         });
         __syncthreads();
 
         // Each thread owns a contiguous run of bitmap words; a block scan gives its output offset.
-        const int words_per_thread = (num_words + BLOCK_SIZE - 1) / BLOCK_SIZE;
+        const int words_per_thread = (num_words + THREADS - 1) / THREADS;
         const int w_begin = min(static_cast<int>(threadIdx.x) * words_per_thread, num_words);
         const int w_end = min(w_begin + words_per_thread, num_words);
         int count = 0;
@@ -153,7 +200,8 @@ numeric_dense_kernel(const CSRMatrix A, const CSRMatrix B, CSRMatrix C, const in
 }
 
 // Like symbolic_global_hash_kernel, but rows are written unsorted; sort_global_rows fixes that.
-__global__ void __launch_bounds__(BLOCK_SIZE)
+template<int THREADS>
+__global__ void __launch_bounds__(THREADS)
 numeric_global_hash_kernel(const CSRMatrix A, const CSRMatrix B, CSRMatrix C, const int* rows, int num_rows,
                            int* key_tables, float* val_tables, size_t table_stride) {
     __shared__ unsigned int fill;
@@ -164,21 +212,19 @@ numeric_global_hash_kernel(const CSRMatrix A, const CSRMatrix B, CSRMatrix C, co
         const int row = rows[idx];
         const size_t row_start = C.row_ptr[row];
         const size_t size = next_pow2(2 * (C.row_ptr[row + 1] - row_start));
-        for (size_t i = threadIdx.x; i < size; i += BLOCK_SIZE) {
-            keys[i] = EMPTY_KEY;
-            vals[i] = 0.0f;
-        }
+        block_fill<THREADS>(keys, size, EMPTY_KEY);
+        block_fill<THREADS>(vals, size, 0.0f);
         if (threadIdx.x == 0) {
             fill = 0;
         }
         __syncthreads();
 
-        for_each_product<true>(A, B, row, threadIdx.x / 32, BLOCK_SIZE / 32, threadIdx.x % 32, 32, [&](size_t col, float v) {
+        for_each_product<true>(A, B, row, threadIdx.x / 32, THREADS / 32, threadIdx.x % 32, 32, [&](size_t col, float v) {
             hash_accumulate(keys, vals, static_cast<unsigned>(size - 1), static_cast<int>(col), v);
         });
         __syncthreads();
 
-        for (size_t i = threadIdx.x; i < size; i += BLOCK_SIZE) {
+        for (size_t i = threadIdx.x; i < size; i += THREADS) {
             if (keys[i] != EMPTY_KEY) {
                 const size_t out = row_start + atomicAdd(&fill, 1u);
                 C.col_indices[out] = keys[i];
@@ -254,7 +300,7 @@ void numeric_phase(const CSRMatrix& A, const CSRMatrix& B, CSRMatrix& C, const B
 
     if (bins.count(BIN_DENSE) > 0) {
         const int n = bins.count(BIN_DENSE);
-        numeric_dense_kernel<false><<<n, BLOCK_SIZE, 0, stream>>>(A, B, C, bins.rows_of(BIN_DENSE), n, nullptr, nullptr);
+        numeric_dense_kernel<false, BLOCK_SIZE><<<n, BLOCK_SIZE, 0, stream>>>(A, B, C, bins.rows_of(BIN_DENSE), n, nullptr, nullptr);
         CHECK_LAST_CUDA_ERROR();
     }
 
@@ -265,7 +311,7 @@ void numeric_phase(const CSRMatrix& A, const CSRMatrix& B, CSRMatrix& C, const B
         unsigned int* bitmaps;
         CHECK_CUDA_ERROR(cudaMallocAsync(&accs, grid * B.num_cols * sizeof(float), stream));
         CHECK_CUDA_ERROR(cudaMallocAsync(&bitmaps, grid * ((B.num_cols + 31) / 32) * sizeof(unsigned int), stream));
-        numeric_dense_kernel<true><<<grid, BLOCK_SIZE, 0, stream>>>(A, B, C, bins.rows_of(BIN_GLOBAL_DENSE), n, accs,
+        numeric_dense_kernel<true, GLOBAL_BLOCK_SIZE><<<grid, GLOBAL_BLOCK_SIZE, 0, stream>>>(A, B, C, bins.rows_of(BIN_GLOBAL_DENSE), n, accs,
                                                                     bitmaps);
         CHECK_LAST_CUDA_ERROR();
         CHECK_CUDA_ERROR(cudaFreeAsync(accs, stream));
@@ -280,7 +326,7 @@ void numeric_phase(const CSRMatrix& A, const CSRMatrix& B, CSRMatrix& C, const B
         float* val_tables;
         CHECK_CUDA_ERROR(cudaMallocAsync(&key_tables, grid * stride * sizeof(int), stream));
         CHECK_CUDA_ERROR(cudaMallocAsync(&val_tables, grid * stride * sizeof(float), stream));
-        numeric_global_hash_kernel<<<grid, BLOCK_SIZE, 0, stream>>>(A, B, C, bins.rows_of(BIN_GLOBAL), n, key_tables,
+        numeric_global_hash_kernel<GLOBAL_BLOCK_SIZE><<<grid, GLOBAL_BLOCK_SIZE, 0, stream>>>(A, B, C, bins.rows_of(BIN_GLOBAL), n, key_tables,
                                                                     val_tables, stride);
         CHECK_LAST_CUDA_ERROR();
         CHECK_CUDA_ERROR(cudaFreeAsync(key_tables, stream));
