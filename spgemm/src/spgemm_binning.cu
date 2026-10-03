@@ -51,6 +51,16 @@ __global__ void bin_count_kernel(const size_t* row_cap, size_t num_rows, size_t 
     }
 }
 
+// Turns the bin counts into each bin's start in bin_rows (the fill cursors), so the host does not
+// have to compute them and send them back.
+__global__ void bin_offsets_kernel(unsigned long long* bin_info) {
+    unsigned long long offsets[NUM_BINS];
+    bin_offsets(bin_info, offsets);
+    for (int b = 0; b < NUM_BINS; ++b) {
+        bin_info[NUM_BINS + 1 + b] = offsets[b];
+    }
+}
+
 // scatter the actual row IDs into their designated bin segments
 __global__ void bin_fill_kernel(const size_t* row_cap, size_t num_rows, size_t num_cols, size_t shared_max,
                                 unsigned long long* bin_cursor, int* bin_rows) {
@@ -72,37 +82,38 @@ void compute_row_caps(const View& A, const View& B, size_t* row_cap, cudaStream_
     CHECK_LAST_CUDA_ERROR();
 }
 
-void bin_rows(const size_t* row_cap, size_t num_rows, size_t num_cols, size_t shared_max,
-              unsigned long long* d_bin_info, Bins& bins, cudaStream_t stream) {
-    unsigned long long info[2 * NUM_BINS + 1];
+void bin_rows_async(const size_t* row_cap, size_t num_rows, size_t num_cols, size_t shared_max,
+                    unsigned long long* d_bin_info, int* bin_rows, unsigned long long* host_info, cudaStream_t stream) {
     const unsigned grid = static_cast<unsigned>((num_rows + BLOCK_SIZE - 1) / BLOCK_SIZE);
 
-    CHECK_CUDA_ERROR(cudaMemsetAsync(d_bin_info, 0, sizeof(info), stream));
+    CHECK_CUDA_ERROR(cudaMemsetAsync(d_bin_info, 0, BIN_INFO_SIZE * sizeof(unsigned long long), stream));
     // build histogram
     bin_count_kernel<<<grid, BLOCK_SIZE, 0, stream>>>(row_cap, num_rows, num_cols, shared_max, d_bin_info);
     CHECK_LAST_CUDA_ERROR();
-    // Copy counts to host. CPU needs the bin sizes to decide which kernels to launch.
-    CHECK_CUDA_ERROR(cudaMemcpyAsync(info, d_bin_info, (NUM_BINS + 1) * sizeof(unsigned long long),
-                                     cudaMemcpyDeviceToHost, stream));
-    CHECK_CUDA_ERROR(cudaStreamSynchronize(stream));
-
-    // Compute bin offsets (exclusive prefix sums) for 12 bins
-    size_t running = 0;
-    for (int b = 0; b < NUM_BINS; ++b) {
-        bins.size[b] = info[b];
-        bins.offset[b] = running;
-        info[NUM_BINS + 1 + b] = running;
-        running += (b == BIN_EMPTY) ? 0 : info[b];
-    }
-    bins.global_max_cap = info[NUM_BINS];
-
-    CHECK_CUDA_ERROR(cudaMemcpyAsync(d_bin_info + NUM_BINS + 1, info + NUM_BINS + 1,
-                                     NUM_BINS * sizeof(unsigned long long), cudaMemcpyHostToDevice, stream));
-    bin_fill_kernel<<<grid, BLOCK_SIZE, 0, stream>>>(row_cap, num_rows, num_cols, shared_max,
-                                                     d_bin_info + NUM_BINS + 1, bins.rows);
+    // bin starts, computed on the device
+    bin_offsets_kernel<<<1, 1, 0, stream>>>(d_bin_info);
     CHECK_LAST_CUDA_ERROR();
-    // The host copy of `info` must stay alive until the async copy above has run.
-    CHECK_CUDA_ERROR(cudaStreamSynchronize(stream));
+    // scatter row ids into their bins
+    bin_fill_kernel<<<grid, BLOCK_SIZE, 0, stream>>>(row_cap, num_rows, num_cols, shared_max,
+                                                     d_bin_info + NUM_BINS + 1, bin_rows);
+    CHECK_LAST_CUDA_ERROR();
+    // The host needs the bin sizes to decide which kernels to launch; host_info is pinned, so this is a
+    // direct copy that the caller waits for with its next synchronization.
+    CHECK_CUDA_ERROR(cudaMemcpyAsync(host_info, d_bin_info, BIN_HOST_INFO_SIZE * sizeof(unsigned long long),
+                                     cudaMemcpyDeviceToHost, stream));
+}
+
+Bins read_bins(const unsigned long long* host_info, int* bin_rows) {
+    Bins bins;
+    bins.rows = bin_rows;
+    unsigned long long offsets[NUM_BINS];
+    bin_offsets(host_info, offsets);
+    for (int b = 0; b < NUM_BINS; ++b) {
+        bins.size[b] = host_info[b];
+        bins.offset[b] = offsets[b];
+    }
+    bins.global_max_cap = host_info[NUM_BINS];
+    return bins;
 }
 
 template void compute_row_caps<CsrView>(const CsrView&, const CsrView&, size_t*, cudaStream_t);

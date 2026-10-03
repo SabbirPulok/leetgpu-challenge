@@ -139,3 +139,18 @@ void free_csr_matrix_device(CSRMatrix& matrix) {
     matrix.num_rows = 0;
     matrix.num_cols = 0;
 }
+
+void free_csr_matrix_device_async(CSRMatrix& matrix, cudaStream_t stream) {
+    for (void* p : {static_cast<void*>(matrix.row_ptr), static_cast<void*>(matrix.col_indices),
+                    static_cast<void*>(matrix.values)}) {
+        if (p) {
+            CHECK_CUDA_ERROR(cudaFreeAsync(p, stream));
+        }
+    }
+    matrix.row_ptr = nullptr;
+    matrix.col_indices = nullptr;
+    matrix.values = nullptr;
+    matrix.nnz = 0;
+    matrix.num_rows = 0;
+    matrix.num_cols = 0;
+}

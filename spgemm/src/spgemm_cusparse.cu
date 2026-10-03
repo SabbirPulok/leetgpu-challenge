@@ -62,6 +62,14 @@ void free_csr32(DeviceCsr32& d) {
     d = DeviceCsr32{};
 }
 
+// For a C from cusparse_multiply (pool memory): released in stream order, without waiting.
+void free_csr32_async(DeviceCsr32& d, cudaStream_t stream) {
+    CHECK_CUDA_ERROR(cudaFreeAsync(d.row_ptr, stream));
+    CHECK_CUDA_ERROR(cudaFreeAsync(d.col_indices, stream));
+    CHECK_CUDA_ERROR(cudaFreeAsync(d.values, stream));
+    d = DeviceCsr32{};
+}
+
 cusparseSpMatDescr_t describe(const DeviceCsr32& d) {
     cusparseSpMatDescr_t mat;
     CHECK_CUSPARSE(cusparseCreateCsr(&mat, d.num_rows, d.num_cols, d.nnz, d.row_ptr, d.col_indices, d.values,
@@ -69,9 +77,9 @@ cusparseSpMatDescr_t describe(const DeviceCsr32& d) {
     return mat;
 }
 
-// The full cusparseSpGEMM sequence, including allocation of C: what a caller pays per multiply. Work
-// buffers come from the same stream-ordered pool as our implementation's scratch space, so both
-// sides get the same allocation cost.
+// The full cusparseSpGEMM sequence, including allocation of C: what a caller pays per multiply. C and
+// the work buffers come from the same stream-ordered pool as our implementation's, so both sides get
+// the same allocation cost.
 DeviceCsr32 cusparse_multiply(cusparseHandle_t handle, cusparseSpMatDescr_t mat_a, cusparseSpMatDescr_t mat_b,
                               int num_rows, int num_cols, cudaStream_t stream) {
     const float alpha = 1.0f, beta = 0.0f;
@@ -81,7 +89,7 @@ DeviceCsr32 cusparse_multiply(cusparseHandle_t handle, cusparseSpMatDescr_t mat_
     DeviceCsr32 c;
     c.num_rows = num_rows;
     c.num_cols = num_cols;
-    CHECK_CUDA_ERROR(cudaMalloc(&c.row_ptr, (num_rows + 1) * sizeof(int)));
+    CHECK_CUDA_ERROR(cudaMallocAsync(&c.row_ptr, (num_rows + 1) * sizeof(int), stream));
 
     cusparseSpMatDescr_t mat_c;
     CHECK_CUSPARSE(cusparseCreateCsr(&mat_c, num_rows, num_cols, 0, c.row_ptr, nullptr, nullptr, CUSPARSE_INDEX_32I,
@@ -104,8 +112,8 @@ DeviceCsr32 cusparse_multiply(cusparseHandle_t handle, cusparseSpMatDescr_t mat_
 
     int64_t rows, cols;
     CHECK_CUSPARSE(cusparseSpMatGetSize(mat_c, &rows, &cols, &c.nnz));
-    CHECK_CUDA_ERROR(cudaMalloc(&c.col_indices, std::max<int64_t>(c.nnz, 1) * sizeof(int)));
-    CHECK_CUDA_ERROR(cudaMalloc(&c.values, std::max<int64_t>(c.nnz, 1) * sizeof(float)));
+    CHECK_CUDA_ERROR(cudaMallocAsync(&c.col_indices, std::max<int64_t>(c.nnz, 1) * sizeof(int), stream));
+    CHECK_CUDA_ERROR(cudaMallocAsync(&c.values, std::max<int64_t>(c.nnz, 1) * sizeof(float), stream));
     CHECK_CUSPARSE(cusparseCsrSetPointers(mat_c, c.row_ptr, c.col_indices, c.values));
     CHECK_CUSPARSE(cusparseSpGEMM_copy(handle, op, op, &alpha, mat_a, mat_b, &beta, mat_c, CUDA_R_32F, alg, desc));
 
@@ -167,7 +175,7 @@ void launch_cusparse_spgemm(const CSRMatrix& matrix_a, const CSRMatrix& matrix_b
 
     std::function<void(cudaStream_t)> const bound_multiply = [&](cudaStream_t) {
         DeviceCsr32 tmp = cusparse_multiply(handle, mat_a, mat_b, a.num_rows, b.num_cols, stream);
-        free_csr32(tmp);
+        free_csr32_async(tmp, stream);
     };
     float latency {measure_performance(bound_multiply, stream, REPEAT_COUNT, WARMUP_COUNT)};
     std::cout << std::fixed << std::setprecision(3) << "  cuSPARSE latency: " << latency << " ms" << std::endl;

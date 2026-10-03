@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cuda_runtime.h>
 
 struct CSRMatrix {
     size_t* row_ptr = nullptr;     // size: num_rows + 1
@@ -16,3 +17,5 @@ void allocate_csr_matrix_device(const CSRMatrix& host_matrix, CSRMatrix& device_
 void copy_csr_matrix_to_host(const CSRMatrix& device_matrix, CSRMatrix& host_matrix);
 void free_csr_matrix_host(CSRMatrix& matrix);
 void free_csr_matrix_device(CSRMatrix& matrix);
+// For arrays from cudaMallocAsync (such as SpGEMM results): released in stream order, without waiting.
+void free_csr_matrix_device_async(CSRMatrix& matrix, cudaStream_t stream);
