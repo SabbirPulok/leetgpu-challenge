@@ -63,6 +63,50 @@ bool create_sparse_csr_matrix(int M, int N, float sparsity, CSRMatrix& csr_matri
     return true;
 }
 
+bool create_block_sparse_csr_matrix(int M, int N, int block_size, float block_density, CSRMatrix& csr_matrix,
+                                    int seed) {
+    if (M <= 0 || N <= 0 || block_size <= 0 || M % block_size != 0 || N % block_size != 0 || block_density < 0.0f ||
+        block_density > 1.0f) {
+        return false;
+    }
+    const size_t b = static_cast<size_t>(block_size);
+    const size_t block_rows = M / b, block_cols = N / b;
+
+    std::default_random_engine gen(seed);
+    std::uniform_real_distribution<float> dist(-256.0f, 256.0f);
+    std::binomial_distribution<size_t> blocks_dist(block_cols, block_density);
+    std::vector<size_t> all_block_cols(block_cols);
+    std::iota(all_block_cols.begin(), all_block_cols.end(), 0);
+
+    std::vector<std::vector<size_t>> row_blocks(block_rows);
+    for (size_t I = 0; I < block_rows; ++I) {
+        row_blocks[I].resize(blocks_dist(gen));
+        std::sample(all_block_cols.begin(), all_block_cols.end(), row_blocks[I].begin(), row_blocks[I].size(), gen);
+    }
+
+    csr_matrix.num_rows = M;
+    csr_matrix.num_cols = N;
+    csr_matrix.row_ptr = new size_t[M + 1];
+    csr_matrix.row_ptr[0] = 0;
+    for (size_t r = 0; r < static_cast<size_t>(M); ++r) {
+        csr_matrix.row_ptr[r + 1] = csr_matrix.row_ptr[r] + row_blocks[r / b].size() * b;
+    }
+    csr_matrix.nnz = csr_matrix.row_ptr[M];
+    csr_matrix.col_indices = csr_matrix.nnz ? new size_t[csr_matrix.nnz] : nullptr;
+    csr_matrix.values = csr_matrix.nnz ? new float[csr_matrix.nnz] : nullptr;
+    for (size_t r = 0; r < static_cast<size_t>(M); ++r) {
+        size_t out = csr_matrix.row_ptr[r];
+        for (size_t J : row_blocks[r / b]) {
+            for (size_t c = 0; c < b; ++c) {
+                csr_matrix.col_indices[out] = J * b + c;
+                csr_matrix.values[out] = dist(gen);
+                ++out;
+            }
+        }
+    }
+    return true;
+}
+
 void allocate_csr_matrix_device(const CSRMatrix& host_matrix, CSRMatrix& device_matrix) {
     device_matrix.num_rows = host_matrix.num_rows;
     device_matrix.num_cols = host_matrix.num_cols;

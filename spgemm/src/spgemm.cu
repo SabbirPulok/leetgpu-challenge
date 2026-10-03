@@ -5,6 +5,8 @@
 #include <sell_format.hpp>
 #include <sparse_format.hpp>
 #include <spgemm.h>
+#include <bell_format.hpp>
+#include <spgemm_bell.cuh>
 #include <spgemm_binning.cuh>
 #include <spgemm_formats.cuh>
 #include <spgemm_numeric.cuh>
@@ -29,7 +31,8 @@
 //   spgemm_binning.cu        step 1 (upper bound) and grouping rows into bins
 //   spgemm_symbolic.cu       step 2 kernels
 //   spgemm_numeric.cu        step 4 kernels
-//   spgemm_views.cuh         how the kernels read and write each storage format (CSR, SELL)
+//   spgemm_views.cuh         how the kernels read and write each storage format (CSR, SELL, BELL pattern)
+//   spgemm_bell.cu           Blocked ELL's second stage: the dense tiles of C
 //   spgemm_formats.cu        per-format setup: input views, sizing and allocating the output
 //   this file                the pipeline (steps 1-4 in order) and the benchmark entry point
 namespace {
@@ -53,16 +56,19 @@ HostReadback* host_readback() {
     return buffer;
 }
 
-// C = A * B for device matrices of the same format (CSRMatrix or SellMatrix; a SELL result uses A's slice
-// size). C's arrays come from the stream-ordered pool: release them with the format's
+// C = A * B for device matrices of the same format (CSRMatrix, SellMatrix or BlockedEllMatrix; a SELL or
+// BELL result uses A's slice / block size). For BELL, steps 1-4 run on the block pattern (rows and columns
+// below are block rows and block columns) and a block kernel then fills C's tiles. C's arrays come from the stream-ordered pool: release them with the format's
 // free_*_device_async on a stream, or with free_*_device once `stream` has finished.
 // The host waits on the device twice: for the symbolic bin sizes, and for C's size plus the numeric bin sizes.
 template<typename Matrix>
 void spgemm_device(const Matrix& A, const Matrix& B, Matrix& C, cudaStream_t stream) {
-    const size_t M = A.num_rows;
-    const size_t N = B.num_cols;
     keep_pool_memory_between_calls();
     HostReadback* host = host_readback();
+    const auto a = make_view(A, stream);
+    const auto b = make_view(B, stream);
+    const size_t M = a.num_rows;
+    const size_t N = b.num_cols;
 
     size_t *row_cap, *row_nnz;
     int* bin_rows;
@@ -73,8 +79,6 @@ void spgemm_device(const Matrix& A, const Matrix& B, Matrix& C, cudaStream_t str
     CHECK_CUDA_ERROR(cudaMallocAsync(&bin_info, BIN_INFO_SIZE * sizeof(unsigned long long), stream));
 
     // 1. Upper bound per row C
-    const auto a = make_view(A, stream);
-    const auto b = make_view(B, stream);
     compute_row_caps(a, b, row_cap, stream);
 
     // 2. Symbolic phase. Empty rows are never launched, so their count stays 0 from this memset;
@@ -87,10 +91,13 @@ void spgemm_device(const Matrix& A, const Matrix& B, Matrix& C, cudaStream_t str
     // 3. Row offsets of C from row_nnz (CSR: row_ptr; SELL: slice offsets). The numeric phase's binning
     //    only needs row_nnz, so it is queued right behind and its bin sizes come back in the same wait.
     C = Matrix{};
-    C.num_rows = M;
-    C.num_cols = N;
+    C.num_rows = A.num_rows;
+    C.num_cols = B.num_cols;
     if constexpr (std::is_same_v<Matrix, SellMatrix>) {
         C.slice_size = A.slice_size;
+    }
+    if constexpr (std::is_same_v<Matrix, BlockedEllMatrix>) {
+        C.block_size = A.block_size;
     }
     plan_output(C, row_nnz, &host->output, stream);
     bin_rows_async(row_nnz, M, N, NUMERIC_SHARED_MAX, bin_info, bin_rows, host->numeric_bins, stream);
@@ -100,6 +107,9 @@ void spgemm_device(const Matrix& A, const Matrix& B, Matrix& C, cudaStream_t str
     allocate_output(C, host->output, stream);
     if (C.nnz > 0) {
         numeric_phase(a, b, layout_of(C), row_nnz, read_bins(host->numeric_bins, bin_rows), stream);
+        if constexpr (std::is_same_v<Matrix, BlockedEllMatrix>) {
+            bell_block_values(A, a.row_lengths, B, b.row_lengths, C, row_nnz, stream);
+        }
     }
 
     release_view(a, stream);
@@ -121,17 +131,29 @@ void release_async(CSRMatrix& device, cudaStream_t s) { free_csr_matrix_device_a
 void release_async(SellMatrix& device, cudaStream_t s) { free_sell_matrix_device_async(device, s); }
 const char* format_name(const CSRMatrix&) { return "CSR"; }
 const char* format_name(const SellMatrix&) { return "SELL"; }
+void upload(const BlockedEllMatrix& host, BlockedEllMatrix& device) { allocate_bell_matrix_device(host, device); }
+void download(const BlockedEllMatrix& device, BlockedEllMatrix& host) { copy_bell_matrix_to_host(device, host); }
+void release(BlockedEllMatrix& device) { free_bell_matrix_device(device); }
+void release_async(BlockedEllMatrix& device, cudaStream_t s) { free_bell_matrix_device_async(device, s); }
+const char* format_name(const BlockedEllMatrix&) { return "BELL"; }
 
 } // namespace
 
 template<typename T>
 void launch_spgemm_kernel(const T& matrix_a, const T& matrix_b, T& matrix_c) {
-    static_assert(std::is_same_v<T, CSRMatrix> || std::is_same_v<T, SellMatrix>, "Supported formats: CSR, SELL");
+    static_assert(std::is_same_v<T, CSRMatrix> || std::is_same_v<T, SellMatrix> || std::is_same_v<T, BlockedEllMatrix>,
+                  "Supported formats: CSR, SELL, Blocked ELL");
 
     if (matrix_a.num_cols != matrix_b.num_rows) {
         std::cerr << "Dimension mismatch: A is " << matrix_a.num_rows << "x" << matrix_a.num_cols << ", B is "
                   << matrix_b.num_rows << "x" << matrix_b.num_cols << std::endl;
         std::exit(EXIT_FAILURE);
+    }
+    if constexpr (std::is_same_v<T, BlockedEllMatrix>) {
+        if (matrix_a.block_size != matrix_b.block_size) {
+            std::cerr << "Blocked ELL operands must have the same block size" << std::endl;
+            std::exit(EXIT_FAILURE);
+        }
     }
     if (matrix_a.num_rows > INT_MAX || matrix_b.num_cols > INT_MAX) {
         // Row ids in the bins and column keys in the hash tables are 32-bit.
@@ -170,3 +192,4 @@ void launch_spgemm_kernel(const T& matrix_a, const T& matrix_b, T& matrix_c) {
 
 template void launch_spgemm_kernel<CSRMatrix>(const CSRMatrix&, const CSRMatrix&, CSRMatrix&);
 template void launch_spgemm_kernel<SellMatrix>(const SellMatrix&, const SellMatrix&, SellMatrix&);
+template void launch_spgemm_kernel<BlockedEllMatrix>(const BlockedEllMatrix&, const BlockedEllMatrix&, BlockedEllMatrix&);

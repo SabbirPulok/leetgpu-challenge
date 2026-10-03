@@ -184,5 +184,7 @@ void symbolic_phase(const View& A, const View& B, const size_t* row_cap, const B
 
 template void symbolic_phase<CsrView>(const CsrView&, const CsrView&, const size_t*, const Bins&, size_t*, cudaStream_t);
 template void symbolic_phase<SellView>(const SellView&, const SellView&, const size_t*, const Bins&, size_t*, cudaStream_t);
+template void symbolic_phase<BellPatternView>(const BellPatternView&, const BellPatternView&, const size_t*, const Bins&,
+                                              size_t*, cudaStream_t);
 
 } // namespace spgemm_detail

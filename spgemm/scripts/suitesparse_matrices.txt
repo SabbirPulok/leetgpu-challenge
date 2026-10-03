@@ -1,0 +1,28 @@
+# SuiteSparse matrices for benchmarking: <group>/<name> as on https://sparse.tamu.edu.
+# scripts/fetch_suitesparse.py downloads them into matrices/ (git-ignored); the files are never committed.
+
+# The set commonly used in GPU SpGEMM papers (nsparse, spECK, OpSparse), benchmarked as A * A.
+Williams/cant
+Williams/consph
+Williams/cop20k_A
+Williams/mac_econ_fwd500
+Williams/mc2depi
+Williams/pdb1HYS
+Bova/rma10
+Hamm/scircuit
+DNVS/shipsec1
+Williams/webbase-1M
+SNAP/wiki-Vote
+Um/2cubes_sphere
+Um/offshore
+vanHeukelum/cage12
+GHS_psdef/hood
+Oberwolfach/filter3D
+Boeing/pwtk
+
+# Real-space DFT Hamiltonians from the PARSEC electronic structure code.
+PARSEC/SiH4
+PARSEC/Si5H12
+PARSEC/Si10H16
+PARSEC/SiO
+PARSEC/Ga3As3H12

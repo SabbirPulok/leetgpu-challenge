@@ -1,5 +1,6 @@
 #pragma once
 
+#include <bell_format.hpp>
 #include <sell_format.hpp>
 #include <sparse_format.hpp>
 

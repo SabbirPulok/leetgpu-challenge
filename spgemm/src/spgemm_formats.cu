@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cuda_runtime.h>
 #include <cub/cub.cuh>
 #include <spgemm_config.cuh>
@@ -37,6 +38,19 @@ __global__ void sell_slice_sizes_kernel(const size_t* row_nnz, size_t num_rows, 
         slice_sizes[s] = width * slice_size;
     } else if (s == num_slices) {
         slice_sizes[s] = 0;
+    }
+}
+
+// One thread per block row: its blocks come before its padding, so count until the first pad.
+__global__ void bell_row_lengths_kernel(const size_t* block_col_indices, size_t num_block_rows, size_t ell_width,
+                                        size_t* row_lengths) {
+    const size_t I = blockIdx.x * static_cast<size_t>(blockDim.x) + threadIdx.x;
+    if (I < num_block_rows) {
+        size_t length = 0;
+        while (length < ell_width && block_col_indices[I * ell_width + length] != BELL_PADDING) {
+            ++length;
+        }
+        row_lengths[I] = length;
     }
 }
 
@@ -117,6 +131,57 @@ void allocate_output(SellMatrix& C, const OutputSizes& sizes, cudaStream_t strea
         CHECK_CUDA_ERROR(cudaMallocAsync(&C.values, C.values_size * sizeof(float), stream));
         CHECK_CUDA_ERROR(cudaMemsetAsync(C.col_indices, 0xFF, C.values_size * sizeof(size_t), stream));
         CHECK_CUDA_ERROR(cudaMemsetAsync(C.values, 0, C.values_size * sizeof(float), stream));
+    }
+}
+
+BellPatternView make_view(const BlockedEllMatrix& m, cudaStream_t stream) {
+    const size_t num_block_rows = m.num_block_rows();
+    size_t* row_lengths;
+    CHECK_CUDA_ERROR(cudaMallocAsync(&row_lengths, num_block_rows * sizeof(size_t), stream));
+    bell_row_lengths_kernel<<<(num_block_rows + BLOCK_SIZE - 1) / BLOCK_SIZE, BLOCK_SIZE, 0, stream>>>(
+        m.block_col_indices, num_block_rows, m.ell_width, row_lengths);
+    CHECK_LAST_CUDA_ERROR();
+    return {m.block_col_indices, row_lengths, m.ell_width, num_block_rows, m.num_block_cols()};
+}
+
+void release_view(const BellPatternView& v, cudaStream_t stream) {
+    CHECK_CUDA_ERROR(cudaFreeAsync(const_cast<size_t*>(v.row_lengths), stream));
+}
+
+// row_nnz counts blocks per block row: C's ELL width is the largest count, its block count the sum.
+void plan_output(BlockedEllMatrix& C, const size_t* row_nnz, OutputSizes* host_sizes, cudaStream_t stream) {
+    const size_t num_block_rows = C.num_block_rows();
+    size_t* results;  // [0] = sum, [1] = max
+    CHECK_CUDA_ERROR(cudaMallocAsync(&results, 2 * sizeof(size_t), stream));
+    size_t sum_bytes = 0, max_bytes = 0;
+    CHECK_CUDA_ERROR(cub::DeviceReduce::Sum(nullptr, sum_bytes, row_nnz, results, num_block_rows, stream));
+    CHECK_CUDA_ERROR(cub::DeviceReduce::Max(nullptr, max_bytes, row_nnz, results + 1, num_block_rows, stream));
+    void* temp;
+    const size_t temp_bytes = std::max(sum_bytes, max_bytes);
+    CHECK_CUDA_ERROR(cudaMallocAsync(&temp, temp_bytes, stream));
+    CHECK_CUDA_ERROR(cub::DeviceReduce::Sum(temp, sum_bytes, row_nnz, results, num_block_rows, stream));
+    CHECK_CUDA_ERROR(cub::DeviceReduce::Max(temp, max_bytes, row_nnz, results + 1, num_block_rows, stream));
+    CHECK_CUDA_ERROR(cudaMemcpyAsync(&host_sizes->nnz, results, sizeof(size_t), cudaMemcpyDeviceToHost, stream));
+    CHECK_CUDA_ERROR(cudaMemcpyAsync(&host_sizes->ell_width, results + 1, sizeof(size_t), cudaMemcpyDeviceToHost,
+                                     stream));
+    CHECK_CUDA_ERROR(cudaFreeAsync(temp, stream));
+    CHECK_CUDA_ERROR(cudaFreeAsync(results, stream));
+}
+
+// Padding slots must read as BELL_PADDING with zero tiles: the numeric stages only write real blocks.
+void allocate_output(BlockedEllMatrix& C, const OutputSizes& sizes, cudaStream_t stream) {
+    C.num_blocks = sizes.nnz;
+    C.ell_width = sizes.ell_width;
+    C.nnz = C.num_blocks * C.block_size * C.block_size;
+    C.block_col_indices = nullptr;
+    C.values = nullptr;
+    if (C.num_blocks > 0) {
+        static_assert(BELL_PADDING == SIZE_MAX, "an all-ones byte pattern must equal BELL_PADDING");
+        const size_t num_slots = C.num_block_rows() * C.ell_width;
+        CHECK_CUDA_ERROR(cudaMallocAsync(&C.block_col_indices, num_slots * sizeof(size_t), stream));
+        CHECK_CUDA_ERROR(cudaMallocAsync(&C.values, C.num_rows * C.ell_cols() * sizeof(float), stream));
+        CHECK_CUDA_ERROR(cudaMemsetAsync(C.block_col_indices, 0xFF, num_slots * sizeof(size_t), stream));
+        CHECK_CUDA_ERROR(cudaMemsetAsync(C.values, 0, C.num_rows * C.ell_cols() * sizeof(float), stream));
     }
 }
 

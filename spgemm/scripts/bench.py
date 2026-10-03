@@ -5,6 +5,7 @@ Usage:
     scripts/bench.py                    # 3 runs, compare with bench/baseline.json
     scripts/bench.py --runs 5
     scripts/bench.py --save-baseline    # record this run as the new baseline
+    scripts/bench.py --mtx matrices     # SuiteSparse matrices (A * A); baseline bench/baseline_suitesparse.json
 
 Exit status: 0 if every test passed and no case regressed beyond --threshold, 1 if a test
 failed (or the binary crashed), 2 if tests passed but performance regressed.
@@ -61,29 +62,45 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--binary", default=str(ROOT / "build/bin/spgemm_nvcuda"))
     ap.add_argument("--runs", type=int, default=3)
-    ap.add_argument("--baseline", default=str(ROOT / "bench/baseline.json"))
+    ap.add_argument("--baseline", help="default: bench/baseline.json, or bench/baseline_suitesparse.json with --mtx")
+    ap.add_argument("--mtx", nargs="+", metavar="PATH", help="Matrix Market files or directories, passed to the binary")
+    ap.add_argument("--hamiltonian", nargs="+", metavar="ARG",
+                    help="cells orbitals cutoff [--shuffle]: one generated Hamiltonian, passed to the binary")
     ap.add_argument("--save-baseline", action="store_true")
     ap.add_argument("--threshold", type=float, default=10.0, help="regression threshold in percent (default 10)")
     ap.add_argument("--min-delta", type=float, default=0.05,
                     help="ignore changes smaller than this many ms; sub-millisecond cases are noisy (default 0.05)")
     args = ap.parse_args()
+    if args.baseline is None:
+        name = "baseline_suitesparse" if args.mtx else "baseline_hamiltonian" if args.hamiltonian else "baseline"
+        args.baseline = str(ROOT / "bench" / f"{name}.json")
+    command = [args.binary]
+    if args.mtx:
+        command += ["--mtx"] + args.mtx
+    elif args.hamiltonian:
+        command += ["--hamiltonian"] + args.hamiltonian
 
     runs = []
     for i in range(args.runs):
-        proc = subprocess.run([args.binary], capture_output=True, text=True)
+        proc = subprocess.run(command, capture_output=True, text=True)
         if proc.returncode not in (0, 1) or not proc.stdout.strip():
             print(f"Run {i + 1}: binary exited with status {proc.returncode}\n{proc.stdout}\n{proc.stderr}")
             return 1
         runs.append(parse(proc.stdout))
 
     names = list(runs[0])
-    impls = [k for k in runs[0][names[0]] if k != "ok"]            # in the order the binary prints them
+    impls = []                                                       # in the order the binary prints them
+    for name in names:
+        impls += [k for k in runs[0][name] if k != "ok" and k not in impls]
+    impls = [i for i in impls if i != REFERENCE] + [i for i in impls if i == REFERENCE]   # reference last
     ours = [k for k in impls if k != REFERENCE]
     current = {}
     for name in names:
         current[name] = {"ok": all(r.get(name, {}).get("ok", False) for r in runs)}
         for impl in impls:
-            current[name][impl] = statistics.median(r[name][impl] for r in runs if impl in r.get(name, {}))
+            times = [r[name][impl] for r in runs if impl in r.get(name, {})]
+            if times:                                                    # not every implementation runs every case
+                current[name][impl] = statistics.median(times)
 
     baseline_path = Path(args.baseline)
     baseline = json.loads(baseline_path.read_text()) if baseline_path.exists() else None
@@ -105,10 +122,13 @@ def main():
     failed = regressed = False
     for name, c in current.items():
         failed |= not c["ok"]
-        cells = [name, "yes" if c["ok"] else "NO"] + [f"{c[i]:.3f}" for i in impls]
-        cells += [f"{c[REFERENCE] / c[i]:.2f}x" if REFERENCE in c else "-" for i in ours]
+        cells = [name, "yes" if c["ok"] else "NO"] + [f"{c[i]:.3f}" if i in c else "-" for i in impls]
+        cells += [f"{c[REFERENCE] / c[i]:.2f}x" if REFERENCE in c and i in c else "-" for i in ours]
         for impl in ours:
             base = base_cases.get(name, {}).get(impl)
+            if impl not in c:
+                cells.append("-")
+                continue
             if not base:
                 cells.append("new")
                 continue

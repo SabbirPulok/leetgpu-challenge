@@ -12,6 +12,11 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
 
+# Use the libraries of the toolkit that compiles the code. Without this, CUDAToolkit can pick up a
+# different CUDA installation's libraries (here: the system's CUDA 11 cuSPARSE next to CUDA 13 headers).
+get_filename_component(CUDA_COMPILER_TOOLKIT_ROOT "${CMAKE_CUDA_COMPILER}" DIRECTORY)
+get_filename_component(CUDA_COMPILER_TOOLKIT_ROOT "${CUDA_COMPILER_TOOLKIT_ROOT}" DIRECTORY)
+set(CUDAToolkit_ROOT "${CUDA_COMPILER_TOOLKIT_ROOT}")
 find_package(CUDAToolkit REQUIRED)
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)

@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <numeric>
+#include <string>
 #include <vector>
 #include <cuda_runtime.h>
 #include <cusparse.h>
@@ -64,9 +65,11 @@ void free_csr32(DeviceCsr32& d) {
 
 // For a C from cusparse_multiply (pool memory): released in stream order, without waiting.
 void free_csr32_async(DeviceCsr32& d, cudaStream_t stream) {
-    CHECK_CUDA_ERROR(cudaFreeAsync(d.row_ptr, stream));
-    CHECK_CUDA_ERROR(cudaFreeAsync(d.col_indices, stream));
-    CHECK_CUDA_ERROR(cudaFreeAsync(d.values, stream));
+    for (void* p : {static_cast<void*>(d.row_ptr), static_cast<void*>(d.col_indices), static_cast<void*>(d.values)}) {
+        if (p) {
+            CHECK_CUDA_ERROR(cudaFreeAsync(p, stream));
+        }
+    }
     d = DeviceCsr32{};
 }
 
@@ -77,51 +80,127 @@ cusparseSpMatDescr_t describe(const DeviceCsr32& d) {
     return mat;
 }
 
-// The full cusparseSpGEMM sequence, including allocation of C: what a caller pays per multiply. C and
-// the work buffers come from the same stream-ordered pool as our implementation's, so both sides get
-// the same allocation cost.
-DeviceCsr32 cusparse_multiply(cusparseHandle_t handle, cusparseSpMatDescr_t mat_a, cusparseSpMatDescr_t mat_b,
-                              int num_rows, int num_cols, cudaStream_t stream) {
+// Fractions of the intermediate products ALG3 processes per chunk, tried in order until the buffers fit:
+// smaller uses less memory but makes more passes.
+constexpr float ALG3_CHUNK_FRACTIONS[] = {0.2f, 0.05f, 0.01f};
+
+// Like CHECK_CUSPARSE, but hands a failure back to the caller instead of exiting: on large products
+// cuSPARSE can legitimately refuse (e.g. CUSPARSE_STATUS_INSUFFICIENT_RESOURCES).
+#define RETURN_IF_CUSPARSE_FAILS(call)                                                              \
+    do {                                                                                            \
+        cusparseStatus_t status_ = (call);                                                          \
+        if (status_ != CUSPARSE_STATUS_SUCCESS) {                                                   \
+            return status_;                                                                         \
+        }                                                                                           \
+    } while (0)
+
+// cudaMallocAsync that reports running out of memory instead of exiting: on the cuSPARSE side a buffer
+// that does not fit means "cuSPARSE cannot do this product", not a bug. (The error is not sticky.)
+#define RETURN_IF_ALLOC_FAILS(ptr, bytes, stream)                                                   \
+    do {                                                                                            \
+        cudaError_t err_ = cudaMallocAsync((ptr), (bytes), (stream));                               \
+        if (err_ == cudaErrorMemoryAllocation) {                                                    \
+            cudaGetLastError();                                                                     \
+            return CUSPARSE_STATUS_INSUFFICIENT_RESOURCES;                                          \
+        }                                                                                           \
+        CHECK_CUDA_ERROR(err_);                                                                     \
+    } while (0)
+
+// What one SpGEMM call holds besides C; released (in stream order) however the call ends.
+struct SpGEMMScratch {
+    cudaStream_t stream;
+    cusparseSpMatDescr_t mat_c = nullptr;
+    cusparseSpGEMMDescr_t desc = nullptr;
+    void* buffers[3] = {};
+
+    ~SpGEMMScratch() {
+        if (desc) {
+            cusparseSpGEMM_destroyDescr(desc);
+        }
+        if (mat_c) {
+            cusparseDestroySpMat(mat_c);
+        }
+        for (void* b : buffers) {
+            if (b) {
+                cudaFreeAsync(b, stream);
+            }
+        }
+    }
+};
+
+// Runs workEstimation for alg on a fresh descriptor (the first step of every cuSPARSE SpGEMM).
+cusparseStatus_t start_spgemm(cusparseHandle_t handle, cusparseSpMatDescr_t mat_a, cusparseSpMatDescr_t mat_b,
+                              int* c_row_ptr, int num_rows, int num_cols, cusparseSpGEMMAlg_t alg, SpGEMMScratch& s) {
     const float alpha = 1.0f, beta = 0.0f;
     const cusparseOperation_t op = CUSPARSE_OPERATION_NON_TRANSPOSE;
-    const cusparseSpGEMMAlg_t alg = CUSPARSE_SPGEMM_DEFAULT;
+    RETURN_IF_CUSPARSE_FAILS(cusparseCreateCsr(&s.mat_c, num_rows, num_cols, 0, c_row_ptr, nullptr, nullptr,
+                                               CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I, CUSPARSE_INDEX_BASE_ZERO,
+                                               CUDA_R_32F));
+    RETURN_IF_CUSPARSE_FAILS(cusparseSpGEMM_createDescr(&s.desc));
+    size_t buffer1_size = 0;
+    RETURN_IF_CUSPARSE_FAILS(cusparseSpGEMM_workEstimation(handle, op, op, &alpha, mat_a, mat_b, &beta, s.mat_c,
+                                                           CUDA_R_32F, alg, s.desc, &buffer1_size, nullptr));
+    RETURN_IF_ALLOC_FAILS(&s.buffers[0], buffer1_size, s.stream);
+    RETURN_IF_CUSPARSE_FAILS(cusparseSpGEMM_workEstimation(handle, op, op, &alpha, mat_a, mat_b, &beta, s.mat_c,
+                                                           CUDA_R_32F, alg, s.desc, &buffer1_size, s.buffers[0]));
+    return CUSPARSE_STATUS_SUCCESS;
+}
 
-    DeviceCsr32 c;
+// The full cusparseSpGEMM sequence, including allocation of C: what a caller pays per multiply. C and
+// the work buffers come from the same stream-ordered pool as our implementation's, so both sides get
+// the same allocation cost. alg is CUSPARSE_SPGEMM_DEFAULT, or CUSPARSE_SPGEMM_ALG3 (memory-limited:
+// it processes the products in chunks) when the default cannot handle the product. On failure c is
+// left empty and the status is returned.
+// chunk_fraction is used by ALG3 only.
+cusparseStatus_t cusparse_multiply(cusparseHandle_t handle, cusparseSpMatDescr_t mat_a, cusparseSpMatDescr_t mat_b,
+                                   int num_rows, int num_cols, cudaStream_t stream, cusparseSpGEMMAlg_t alg,
+                                   float chunk_fraction, DeviceCsr32& c) {
+    const float alpha = 1.0f, beta = 0.0f;
+    const cusparseOperation_t op = CUSPARSE_OPERATION_NON_TRANSPOSE;
+    c = DeviceCsr32{};
     c.num_rows = num_rows;
     c.num_cols = num_cols;
-    CHECK_CUDA_ERROR(cudaMallocAsync(&c.row_ptr, (num_rows + 1) * sizeof(int), stream));
+    if (cudaMallocAsync(&c.row_ptr, (num_rows + 1) * sizeof(int), stream) == cudaErrorMemoryAllocation) {
+        cudaGetLastError();
+        return CUSPARSE_STATUS_INSUFFICIENT_RESOURCES;
+    }
 
-    cusparseSpMatDescr_t mat_c;
-    CHECK_CUSPARSE(cusparseCreateCsr(&mat_c, num_rows, num_cols, 0, c.row_ptr, nullptr, nullptr, CUSPARSE_INDEX_32I,
-                                     CUSPARSE_INDEX_32I, CUSPARSE_INDEX_BASE_ZERO, CUDA_R_32F));
-    cusparseSpGEMMDescr_t desc;
-    CHECK_CUSPARSE(cusparseSpGEMM_createDescr(&desc));
+    SpGEMMScratch s{stream};
+    auto run = [&]() -> cusparseStatus_t {
+        RETURN_IF_CUSPARSE_FAILS(start_spgemm(handle, mat_a, mat_b, c.row_ptr, num_rows, num_cols, alg, s));
+        size_t buffer2_size = 0;
+        if (alg == CUSPARSE_SPGEMM_ALG3) {
+            // ALG3 sizes its compute buffer from a memory estimate for the chosen chunk fraction.
+            size_t buffer3_size = 0;
+            RETURN_IF_CUSPARSE_FAILS(cusparseSpGEMM_estimateMemory(handle, op, op, &alpha, mat_a, mat_b, &beta,
+                                                                   s.mat_c, CUDA_R_32F, alg, s.desc, chunk_fraction,
+                                                                   &buffer3_size, nullptr, nullptr));
+            RETURN_IF_ALLOC_FAILS(&s.buffers[2], buffer3_size, stream);
+            RETURN_IF_CUSPARSE_FAILS(cusparseSpGEMM_estimateMemory(handle, op, op, &alpha, mat_a, mat_b, &beta,
+                                                                   s.mat_c, CUDA_R_32F, alg, s.desc, chunk_fraction,
+                                                                   &buffer3_size, s.buffers[2], &buffer2_size));
+        } else {
+            RETURN_IF_CUSPARSE_FAILS(cusparseSpGEMM_compute(handle, op, op, &alpha, mat_a, mat_b, &beta, s.mat_c,
+                                                            CUDA_R_32F, alg, s.desc, &buffer2_size, nullptr));
+        }
+        RETURN_IF_ALLOC_FAILS(&s.buffers[1], buffer2_size, stream);
+        RETURN_IF_CUSPARSE_FAILS(cusparseSpGEMM_compute(handle, op, op, &alpha, mat_a, mat_b, &beta, s.mat_c,
+                                                        CUDA_R_32F, alg, s.desc, &buffer2_size, s.buffers[1]));
 
-    size_t buffer1_size = 0, buffer2_size = 0;
-    void *buffer1 = nullptr, *buffer2 = nullptr;
-    CHECK_CUSPARSE(cusparseSpGEMM_workEstimation(handle, op, op, &alpha, mat_a, mat_b, &beta, mat_c, CUDA_R_32F, alg,
-                                                 desc, &buffer1_size, nullptr));
-    CHECK_CUDA_ERROR(cudaMallocAsync(&buffer1, buffer1_size, stream));
-    CHECK_CUSPARSE(cusparseSpGEMM_workEstimation(handle, op, op, &alpha, mat_a, mat_b, &beta, mat_c, CUDA_R_32F, alg,
-                                                 desc, &buffer1_size, buffer1));
-    CHECK_CUSPARSE(cusparseSpGEMM_compute(handle, op, op, &alpha, mat_a, mat_b, &beta, mat_c, CUDA_R_32F, alg, desc,
-                                          &buffer2_size, nullptr));
-    CHECK_CUDA_ERROR(cudaMallocAsync(&buffer2, buffer2_size, stream));
-    CHECK_CUSPARSE(cusparseSpGEMM_compute(handle, op, op, &alpha, mat_a, mat_b, &beta, mat_c, CUDA_R_32F, alg, desc,
-                                          &buffer2_size, buffer2));
-
-    int64_t rows, cols;
-    CHECK_CUSPARSE(cusparseSpMatGetSize(mat_c, &rows, &cols, &c.nnz));
-    CHECK_CUDA_ERROR(cudaMallocAsync(&c.col_indices, std::max<int64_t>(c.nnz, 1) * sizeof(int), stream));
-    CHECK_CUDA_ERROR(cudaMallocAsync(&c.values, std::max<int64_t>(c.nnz, 1) * sizeof(float), stream));
-    CHECK_CUSPARSE(cusparseCsrSetPointers(mat_c, c.row_ptr, c.col_indices, c.values));
-    CHECK_CUSPARSE(cusparseSpGEMM_copy(handle, op, op, &alpha, mat_a, mat_b, &beta, mat_c, CUDA_R_32F, alg, desc));
-
-    CHECK_CUSPARSE(cusparseSpGEMM_destroyDescr(desc));
-    CHECK_CUSPARSE(cusparseDestroySpMat(mat_c));
-    CHECK_CUDA_ERROR(cudaFreeAsync(buffer1, stream));
-    CHECK_CUDA_ERROR(cudaFreeAsync(buffer2, stream));
-    return c;
+        int64_t rows, cols;
+        RETURN_IF_CUSPARSE_FAILS(cusparseSpMatGetSize(s.mat_c, &rows, &cols, &c.nnz));
+        RETURN_IF_ALLOC_FAILS(&c.col_indices, std::max<int64_t>(c.nnz, 1) * sizeof(int), stream);
+        RETURN_IF_ALLOC_FAILS(&c.values, std::max<int64_t>(c.nnz, 1) * sizeof(float), stream);
+        RETURN_IF_CUSPARSE_FAILS(cusparseCsrSetPointers(s.mat_c, c.row_ptr, c.col_indices, c.values));
+        RETURN_IF_CUSPARSE_FAILS(cusparseSpGEMM_copy(handle, op, op, &alpha, mat_a, mat_b, &beta, s.mat_c, CUDA_R_32F,
+                                                     alg, s.desc));
+        return CUSPARSE_STATUS_SUCCESS;
+    };
+    const cusparseStatus_t status = run();
+    if (status != CUSPARSE_STATUS_SUCCESS) {
+        free_csr32_async(c, stream);
+    }
+    return status;
 }
 
 // Copies C back as a size_t CSRMatrix. Rows are sorted here so compare_csr can match entries
@@ -153,9 +232,54 @@ void download_csr32(const DeviceCsr32& d, CSRMatrix& host) {
     }
 }
 
+// The default algorithm's compute buffer grows with the number of intermediate products and can exceed
+// the device (32 GB for one of our Hamiltonian cases on a 24 GB GPU); for some products it refuses
+// outright. Query it, without running the multiply, and fall back to the memory-limited ALG3 when it
+// would not fit or fails. `why` says why ALG3 was chosen.
+cusparseSpGEMMAlg_t choose_algorithm(cusparseHandle_t handle, cusparseSpMatDescr_t mat_a, cusparseSpMatDescr_t mat_b,
+                                     int num_rows, int num_cols, cudaStream_t stream, std::string& why) {
+    const float alpha = 1.0f, beta = 0.0f;
+    const cusparseOperation_t op = CUSPARSE_OPERATION_NON_TRANSPOSE;
+    int* row_ptr;
+    CHECK_CUDA_ERROR(cudaMallocAsync(&row_ptr, (num_rows + 1) * sizeof(int), stream));
+    size_t buffer2_size = 0;
+    cusparseStatus_t status;
+    {
+        SpGEMMScratch s{stream};
+        status = start_spgemm(handle, mat_a, mat_b, row_ptr, num_rows, num_cols, CUSPARSE_SPGEMM_DEFAULT, s);
+        if (status == CUSPARSE_STATUS_SUCCESS) {
+            status = cusparseSpGEMM_compute(handle, op, op, &alpha, mat_a, mat_b, &beta, s.mat_c, CUDA_R_32F,
+                                            CUSPARSE_SPGEMM_DEFAULT, s.desc, &buffer2_size, nullptr);
+        }
+    }
+    CHECK_CUDA_ERROR(cudaFreeAsync(row_ptr, stream));
+    CHECK_CUDA_ERROR(cudaStreamSynchronize(stream));
+    if (status != CUSPARSE_STATUS_SUCCESS) {
+        why = std::string("the default algorithm failed: ") + cusparseGetErrorString(status);
+        return CUSPARSE_SPGEMM_ALG3;
+    }
+
+    // Memory our pool keeps between calls does not show as free; hand it back before deciding.
+    int device;
+    cudaMemPool_t pool;
+    CHECK_CUDA_ERROR(cudaGetDevice(&device));
+    CHECK_CUDA_ERROR(cudaDeviceGetDefaultMemPool(&pool, device));
+    CHECK_CUDA_ERROR(cudaMemPoolTrimTo(pool, 0));
+    size_t free_bytes, total_bytes;
+    CHECK_CUDA_ERROR(cudaMemGetInfo(&free_bytes, &total_bytes));
+    // Leave room for C and the other buffers next to the compute buffer.
+    if (buffer2_size < free_bytes * 0.8) {
+        return CUSPARSE_SPGEMM_DEFAULT;
+    }
+    char text[96];
+    snprintf(text, sizeof(text), "the default algorithm needs a %.1f GB buffer", buffer2_size / 1e9);
+    why = text;
+    return CUSPARSE_SPGEMM_ALG3;
+}
+
 } // namespace
 
-void launch_cusparse_spgemm(const CSRMatrix& matrix_a, const CSRMatrix& matrix_b, CSRMatrix& matrix_c) {
+bool launch_cusparse_spgemm(const CSRMatrix& matrix_a, const CSRMatrix& matrix_b, CSRMatrix& matrix_c) {
     cudaStream_t stream;
     CHECK_CUDA_ERROR(cudaStreamCreate(&stream));
     cusparseHandle_t handle;
@@ -168,17 +292,51 @@ void launch_cusparse_spgemm(const CSRMatrix& matrix_a, const CSRMatrix& matrix_b
     cusparseSpMatDescr_t mat_b = describe(b);
 
     keep_pool_memory_between_calls();
-    DeviceCsr32 c = cusparse_multiply(handle, mat_a, mat_b, a.num_rows, b.num_cols, stream);
-    CHECK_CUDA_ERROR(cudaStreamSynchronize(stream));
-    download_csr32(c, matrix_c);
-    free_csr32(c);
+    std::string why_alg3;
+    cusparseSpGEMMAlg_t alg = choose_algorithm(handle, mat_a, mat_b, a.num_rows, b.num_cols, stream, why_alg3);
+    DeviceCsr32 c;
+    float chunk_fraction = ALG3_CHUNK_FRACTIONS[0];
+    cusparseStatus_t status = CUSPARSE_STATUS_INSUFFICIENT_RESOURCES;
+    if (alg == CUSPARSE_SPGEMM_DEFAULT) {
+        status = cusparse_multiply(handle, mat_a, mat_b, a.num_rows, b.num_cols, stream, alg, chunk_fraction, c);
+        CHECK_CUDA_ERROR(cudaStreamSynchronize(stream));
+        if (status != CUSPARSE_STATUS_SUCCESS) {
+            // The size check passed but the multiply itself was refused: try ALG3 as well.
+            why_alg3 = std::string("the default algorithm failed: ") + cusparseGetErrorString(status);
+            alg = CUSPARSE_SPGEMM_ALG3;
+        }
+    }
+    if (alg == CUSPARSE_SPGEMM_ALG3) {
+        for (float fraction : ALG3_CHUNK_FRACTIONS) {
+            chunk_fraction = fraction;
+            status = cusparse_multiply(handle, mat_a, mat_b, a.num_rows, b.num_cols, stream, alg, chunk_fraction, c);
+            CHECK_CUDA_ERROR(cudaStreamSynchronize(stream));
+            if (status == CUSPARSE_STATUS_SUCCESS) {
+                break;
+            }
+        }
+    }
+    const bool ok = status == CUSPARSE_STATUS_SUCCESS;
+    if (ok) {
+        download_csr32(c, matrix_c);
+        free_csr32(c);
 
-    std::function<void(cudaStream_t)> const bound_multiply = [&](cudaStream_t) {
-        DeviceCsr32 tmp = cusparse_multiply(handle, mat_a, mat_b, a.num_rows, b.num_cols, stream);
-        free_csr32_async(tmp, stream);
-    };
-    float latency {measure_performance(bound_multiply, stream, REPEAT_COUNT, WARMUP_COUNT)};
-    std::cout << std::fixed << std::setprecision(3) << "  cuSPARSE latency: " << latency << " ms" << std::endl;
+        std::function<void(cudaStream_t)> const bound_multiply = [&](cudaStream_t) {
+            DeviceCsr32 tmp;
+            CHECK_CUSPARSE(
+                cusparse_multiply(handle, mat_a, mat_b, a.num_rows, b.num_cols, stream, alg, chunk_fraction, tmp));
+            free_csr32_async(tmp, stream);
+        };
+        float latency {measure_performance(bound_multiply, stream, REPEAT_COUNT, WARMUP_COUNT)};
+        std::cout << std::fixed << std::setprecision(3) << "  cuSPARSE latency: " << latency << " ms";
+        if (alg == CUSPARSE_SPGEMM_ALG3) {
+            std::cout << "  (ALG3 with chunk fraction " << chunk_fraction << ", memory-limited: " << why_alg3 << ")";
+        }
+        std::cout << std::endl;
+    } else {
+        std::cout << "  cuSPARSE: failed (" << cusparseGetErrorString(status)
+                  << (why_alg3.empty() ? "" : "; ALG3 tried because " + why_alg3) << ")" << std::endl;
+    }
 
     CHECK_CUSPARSE(cusparseDestroySpMat(mat_a));
     CHECK_CUSPARSE(cusparseDestroySpMat(mat_b));
@@ -186,4 +344,5 @@ void launch_cusparse_spgemm(const CSRMatrix& matrix_a, const CSRMatrix& matrix_b
     free_csr32(b);
     CHECK_CUSPARSE(cusparseDestroy(handle));
     CHECK_CUDA_ERROR(cudaStreamDestroy(stream));
+    return ok;
 }
