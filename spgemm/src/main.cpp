@@ -1,10 +1,14 @@
 #include <cstdio>
 #include <iostream>
+#include <algorithm>
 #include <vector>
+#include <sell_format.hpp>
 #include <sparse_format.hpp>
 #include <spgemm.h>
 #include <spgemm_cusparse.h>
 #include <spgemm_reference.hpp>
+
+constexpr size_t SELL_SLICE_SIZE = 32;  // one warp
 
 struct TestCase {
     const char* name;
@@ -39,7 +43,19 @@ int main() {
 
         CSRMatrix C_gpu;
         launch_spgemm_kernel(A, B, C_gpu);
-        all_passed &= compare_csr(C_ref, magnitude, C_gpu, "spgemm");
+        all_passed &= compare_csr(C_ref, magnitude, C_gpu, "CSR");
+
+        // Same product in SELL; the result is converted back to CSR for the comparison.
+        SellMatrix A_sell, B_sell, C_sell;
+        csr_to_sell(A, SELL_SLICE_SIZE, A_sell);
+        csr_to_sell(B, SELL_SLICE_SIZE, B_sell);
+        launch_spgemm_kernel(A_sell, B_sell, C_sell);
+        CSRMatrix C_sell_csr;
+        sell_to_csr(C_sell, C_sell_csr);
+        printf("  SELL padding: A %+.0f%%, B %+.0f%%, C %+.0f%% slots over nnz\n",
+               100.0 * A_sell.values_size / A_sell.nnz - 100.0, 100.0 * B_sell.values_size / B_sell.nnz - 100.0,
+               100.0 * C_sell.values_size / std::max<size_t>(C_sell.nnz, 1) - 100.0);
+        all_passed &= compare_csr(C_ref, magnitude, C_sell_csr, "SELL");
 
         CSRMatrix C_cusparse;
         launch_cusparse_spgemm(A, B, C_cusparse);
@@ -50,6 +66,10 @@ int main() {
         free_csr_matrix_host(C_ref);
         free_csr_matrix_host(C_gpu);
         free_csr_matrix_host(C_cusparse);
+        free_csr_matrix_host(C_sell_csr);
+        free_sell_matrix_host(A_sell);
+        free_sell_matrix_host(B_sell);
+        free_sell_matrix_host(C_sell);
     }
 
     printf("\n%s\n", all_passed ? "All tests passed." : "Some tests FAILED.");

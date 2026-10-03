@@ -360,5 +360,7 @@ void numeric_phase(const View& A, const View& B, const Layout& C, const size_t* 
 
 template void numeric_phase<CsrView, CsrLayout>(const CsrView&, const CsrView&, const CsrLayout&, const size_t*,
                                                 const Bins&, cudaStream_t);
+template void numeric_phase<SellView, SellLayout>(const SellView&, const SellView&, const SellLayout&, const size_t*,
+                                                  const Bins&, cudaStream_t);
 
 } // namespace spgemm_detail

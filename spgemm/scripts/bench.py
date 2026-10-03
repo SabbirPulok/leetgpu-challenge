@@ -19,19 +19,22 @@ from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-LATENCY = re.compile(r"^\s+(spgemm|cuSPARSE)\s+latency:\s+([\d.]+) ms")
+LATENCY = re.compile(r"^\s+(\S+)\s+latency:\s+([\d.]+) ms")
+REFERENCE = "cuSPARSE"   # the external baseline; every other implementation is ours
+# Older outputs and baselines called the CSR implementation "spgemm".
+RENAMED = {"spgemm": "CSR"}
 RESULT = re.compile(r"^\s+\[\s*(OK|FAIL)\s*\]\s+(\S+)")
 
 
 def parse(output):
-    """Returns {case name: {"spgemm": ms, "cuSPARSE": ms, "ok": bool}}."""
+    """Returns {case name: {implementation: ms, ..., "ok": bool}}."""
     cases, current = {}, None
     for line in output.splitlines():
         if line and not line[0].isspace() and not line.startswith(("All tests", "Some tests")):
             current = line.strip()
             cases[current] = {"ok": True}
         elif current and (m := LATENCY.match(line)):
-            cases[current][m.group(1)] = float(m.group(2))
+            cases[current][RENAMED.get(m.group(1), m.group(1))] = float(m.group(2))
         elif current and (m := RESULT.match(line)):
             cases[current]["ok"] &= m.group(1) == "OK"
     return cases
@@ -74,17 +77,18 @@ def main():
         runs.append(parse(proc.stdout))
 
     names = list(runs[0])
+    impls = [k for k in runs[0][names[0]] if k != "ok"]            # in the order the binary prints them
+    ours = [k for k in impls if k != REFERENCE]
     current = {}
     for name in names:
-        current[name] = {
-            "ok": all(r.get(name, {}).get("ok", False) for r in runs),
-            "spgemm": statistics.median(r[name]["spgemm"] for r in runs if "spgemm" in r.get(name, {})),
-            "cuSPARSE": statistics.median(r[name]["cuSPARSE"] for r in runs if "cuSPARSE" in r.get(name, {})),
-        }
+        current[name] = {"ok": all(r.get(name, {}).get("ok", False) for r in runs)}
+        for impl in impls:
+            current[name][impl] = statistics.median(r[name][impl] for r in runs if impl in r.get(name, {}))
 
     baseline_path = Path(args.baseline)
     baseline = json.loads(baseline_path.read_text()) if baseline_path.exists() else None
     base_cases = baseline["cases"] if baseline else {}
+    base_cases = {case: {RENAMED.get(k, k): v for k, v in vals.items()} for case, vals in base_cases.items()}
 
     print(f"GPU: {gpu_name()}   commit: {git_commit()}   runs: {args.runs} (median)")
     if baseline:
@@ -93,24 +97,27 @@ def main():
     else:
         print("Baseline: none (run with --save-baseline to record one)")
     print()
-    print("| Case | Correct | spgemm (ms) | cuSPARSE (ms) | vs cuSPARSE | Baseline (ms) | Change |")
-    print("|---|---|---|---|---|---|---|")
+    header = ["Case", "Correct"] + [f"{i} (ms)" for i in impls] + [f"{i} vs {REFERENCE}" for i in ours]
+    header += [f"{i} vs baseline" for i in ours]
+    print("| " + " | ".join(header) + " |")
+    print("|" + "---|" * len(header))
 
     failed = regressed = False
     for name, c in current.items():
         failed |= not c["ok"]
-        speedup = c["cuSPARSE"] / c["spgemm"]
-        base = base_cases.get(name, {}).get("spgemm")
-        if base:
-            change = (c["spgemm"] - base) / base * 100
-            significant = abs(c["spgemm"] - base) >= args.min_delta and abs(change) > args.threshold
+        cells = [name, "yes" if c["ok"] else "NO"] + [f"{c[i]:.3f}" for i in impls]
+        cells += [f"{c[REFERENCE] / c[i]:.2f}x" if REFERENCE in c else "-" for i in ours]
+        for impl in ours:
+            base = base_cases.get(name, {}).get(impl)
+            if not base:
+                cells.append("new")
+                continue
+            change = (c[impl] - base) / base * 100
+            significant = abs(c[impl] - base) >= args.min_delta and abs(change) > args.threshold
             flag = (" REGRESSION" if change > 0 else " faster") if significant else ""
             regressed |= significant and change > 0
-            base_str, change_str = f"{base:.3f}", f"{change:+.1f}%{flag}"
-        else:
-            base_str, change_str = "-", "new case"
-        print(f"| {name} | {'yes' if c['ok'] else 'NO'} | {c['spgemm']:.3f} | {c['cuSPARSE']:.3f} | "
-              f"{speedup:.2f}x | {base_str} | {change_str} |")
+            cells.append(f"{change:+.1f}%{flag}")
+        print("| " + " | ".join(cells) + " |")
 
     for name in base_cases:
         if name not in current:

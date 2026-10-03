@@ -1,5 +1,6 @@
 #pragma once
 
+#include <sell_format.hpp>
 #include <sparse_format.hpp>
 
 template<typename T>

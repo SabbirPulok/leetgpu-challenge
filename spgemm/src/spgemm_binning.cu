@@ -117,5 +117,6 @@ Bins read_bins(const unsigned long long* host_info, int* bin_rows) {
 }
 
 template void compute_row_caps<CsrView>(const CsrView&, const CsrView&, size_t*, cudaStream_t);
+template void compute_row_caps<SellView>(const SellView&, const SellView&, size_t*, cudaStream_t);
 
 } // namespace spgemm_detail
