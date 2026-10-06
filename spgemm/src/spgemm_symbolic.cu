@@ -1,5 +1,4 @@
 #include <cuda_runtime.h>
-#include <cub/cub.cuh>
 #include <sparse_format.hpp>
 #include <spgemm_accumulators.cuh>
 #include <spgemm_symbolic.cuh>
@@ -53,9 +52,7 @@ template<bool GLOBAL, int THREADS, typename View>
 __global__ void __launch_bounds__(THREADS)
 symbolic_dense_kernel(const View A, const View B, const int* rows, int num_rows, size_t* row_nnz,
                       unsigned int* global_bitmaps) {
-    using BlockReduce = cub::BlockReduce<int, THREADS>;
     __shared__ unsigned int shared_bitmap[GLOBAL ? 1 : DENSE_MAX_COLS / 32];
-    __shared__ typename BlockReduce::TempStorage reduce_storage;
 
     const int num_words = static_cast<int>((B.num_cols + 31) / 32);
     unsigned int* bitmap = GLOBAL ? global_bitmaps + blockIdx.x * static_cast<size_t>(num_words) : shared_bitmap;
@@ -74,7 +71,6 @@ symbolic_dense_kernel(const View A, const View B, const int* rows, int num_rows,
         for (int w = threadIdx.x; w < num_words; w += THREADS) {
             count += __popc(bitmap[w]);
         }
-        //count = BlockReduce(reduce_storage).Sum(count);
         block_reduce_sum<THREADS>(count);
         if (threadIdx.x == 0) {
             row_nnz[row] = count;
