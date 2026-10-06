@@ -5,19 +5,16 @@
 // the value is calculated as:
 // output[i,j] = sum(m = -kh/2 to kh/2) sum(n = -kw/2 to kw/2) input[i+m, j+n] * kernel[m+kh/2, n+kw/2]
 
-__device__ __forceinline__ float warp_reduce_sum(float val)
-{
-    #pragma unroll
-    for (int offset = 16; offset > 0; offset /= 2)
-    {
-        val += __shfl_down_sync(0xffffffff, val, offset);
-    }
-    return val;
-}
+#define MAX_KERNEL_SIZE 441
+#define TILE_DIM_X 32
+#define TILE_DIM_Y 8
+#define THREADS_PER_BLOCK (TILE_DIM_X * TILE_DIM_Y)
 
-__global__ void gaussian_blur_kernel(
+__constant__ float kernel_c[MAX_KERNEL_SIZE];
+
+__global__ __launch_bounds__(THREADS_PER_BLOCK)
+void gaussian_blur_kernel(
     const float* __restrict__ input,
-    const float* __restrict__ kernel,
     float* __restrict__ output,
     int input_rows,
     int input_cols,
@@ -25,56 +22,64 @@ __global__ void gaussian_blur_kernel(
     int kernel_cols
 )
 {
-    extern __shared__ float shared_kernel[];
+    extern __shared__ float shared_tile[];
 
-    int tid = threadIdx.x;
-    int blockSize = blockDim.x;
-    int total_kernel = kernel_rows * kernel_cols;
+    const int tx = threadIdx.x;
+    const int ty = threadIdx.y;
 
-    for (int k = tid; k < total_kernel; k += blockSize)
+    const int kernel_radius_x = kernel_cols >> 1;
+    const int kernel_radius_y = kernel_rows >> 1;
+
+    const int col = blockIdx.x * TILE_DIM_X + tx;
+    const int row = blockIdx.y * TILE_DIM_Y + ty;
+
+    const int sh_tile_w = TILE_DIM_X + kernel_cols - 1;
+    const int sh_tile_h = TILE_DIM_Y + kernel_rows - 1;
+    const int smem_stride = sh_tile_w + 1; // padding to eliminate shared memory bank conflicts
+
+    const int tile_start_row = blockIdx.y * TILE_DIM_Y - kernel_radius_y;
+    const int tile_start_col = blockIdx.x * TILE_DIM_X - kernel_radius_x;
+
+    // Cooperative halo loading into shared memory
+    for (int y = ty; y < sh_tile_h; y += blockDim.y)
     {
-        shared_kernel[k] = kernel[k];
+        int in_r = tile_start_row + y;
+        bool valid_r = (in_r >= 0 && in_r < input_rows);
+        int r_offset = in_r * input_cols;
+
+        for (int x = tx; x < sh_tile_w; x += blockDim.x)
+        {
+            int in_c = tile_start_col + x;
+            float val = 0.0f;
+            if (valid_r && in_c >= 0 && in_c < input_cols)
+            {
+                val = input[r_offset + in_c];
+            }
+            shared_tile[y * smem_stride + x] = val;
+        }
     }
     __syncthreads();
 
-    int warps_per_block = blockDim.x / 32;
-    int warp_in_block = threadIdx.x / 32;
-    int warp_id_in_grid = blockIdx.x * warps_per_block + warp_in_block;
-    int total_warps = gridDim.x * warps_per_block;
-    int laneId = threadIdx.x & 31;
-
-    int total_pixels = input_rows * input_cols;
-    int kh_2 = kernel_rows / 2;
-    int kw_2 = kernel_cols / 2;
-
-    // Grid-stride loop over pixels: 1 warp per pixel
-    for (int p = warp_id_in_grid; p < total_pixels; p += total_warps)
+    // Compute convolution
+    if (row < input_rows && col < input_cols)
     {
-        int r = p / input_cols;
-        int c = p % input_cols;
+        float sum = 0.0f;
 
-        float lane_sum = 0.0f;
-
-        for (int k = laneId; k < total_kernel; k += 32)
+        #pragma unroll
+        for (int m = -kernel_radius_y; m <= kernel_radius_y; ++m)
         {
-            int m = (k / kernel_cols) - kh_2;
-            int n = (k % kernel_cols) - kw_2;
-
-            int in_r = r + m;
-            int in_c = c + n;
-
-            if (in_r >= 0 && in_r < input_rows && in_c >= 0 && in_c < input_cols)
+            int smem_y = ty + kernel_radius_y + m;
+            #pragma unroll
+            for (int n = -kernel_radius_x; n <= kernel_radius_x; ++n)
             {
-                lane_sum += input[in_r * input_cols + in_c] * shared_kernel[k];
+                int smem_x = tx + kernel_radius_x + n;
+                int k_idx = (m + kernel_radius_y) * kernel_cols + (n + kernel_radius_x);
+
+                sum += shared_tile[smem_y * smem_stride + smem_x] * kernel_c[k_idx];
             }
         }
 
-        float pixel_sum = warp_reduce_sum(lane_sum);
-
-        if (laneId == 0)
-        {
-            output[p] = pixel_sum;
-        }
+        output[row * input_cols + col] = sum;
     }
 }
 
@@ -89,18 +94,18 @@ extern "C" void solve(
     int kernel_cols
 )
 {
-    constexpr int threadsPerBlock = 256;
-    constexpr int warpsPerBlock = threadsPerBlock / 32;
-    int total_pixels = input_rows * input_cols;
+    cudaMemcpyToSymbol(kernel_c, kernel, kernel_rows * kernel_cols * sizeof(float));
 
-    int blocks = (total_pixels + warpsPerBlock - 1) / warpsPerBlock;
-    if (blocks > 1024) blocks = 1024;
-    if (blocks == 0) blocks = 1;
+    dim3 threadsPerBlock(TILE_DIM_X, TILE_DIM_Y);
+    dim3 blocks((input_cols + TILE_DIM_X - 1) / TILE_DIM_X, (input_rows + TILE_DIM_Y - 1) / TILE_DIM_Y);
 
-    size_t shared_mem_size = kernel_rows * kernel_cols * sizeof(float);
+    int sh_tile_w = TILE_DIM_X + kernel_cols - 1;
+    int sh_tile_h = TILE_DIM_Y + kernel_rows - 1;
+    int smem_stride = sh_tile_w + 1;
+    size_t shared_mem_size = (size_t)sh_tile_h * smem_stride * sizeof(float);
 
     gaussian_blur_kernel<<<blocks, threadsPerBlock, shared_mem_size>>>(
-        input, kernel, output,
+        input, output,
         input_rows, input_cols,
         kernel_rows, kernel_cols
     );
