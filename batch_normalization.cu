@@ -31,10 +31,12 @@ __global__ void batch_normalization_kernel(const float* input, const float* gamm
     __shared__ float shared_s[TILE_SIZE][TILE_SIZE];
     __shared__ float shared_s_sq[TILE_SIZE][TILE_SIZE];
 
-    for (int i = local_row; i < N; i += blockDim.y) {
-        float val = input[i * C + channel];
-        s += val;
-        s_sq += val * val;
+    if(channel < C) {
+        for (int i = local_row; i < N; i += blockDim.y) {
+            float val = input[i * C + channel];
+            s += val;
+            s_sq += val * val;
+        }
     }
     shared_s[local_row][local_col] = s;
     shared_s_sq[local_row][local_col] = s_sq;
