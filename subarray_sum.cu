@@ -6,52 +6,61 @@
 
 #define WARP_SIZE 32
 
-__device__ __forceinline__ int warp_reduce_sum(int val){
+__global__ void subarray_sum_kernel(const int* __restrict__ input, int* output, int count, int head) {
+    const int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    int val = 0;
+
+    if (blockIdx.x == 0 && threadIdx.x == 0) {
+        #pragma unroll
+        for (int k = 0; k < head; ++k) {
+            val += input[k];
+        }
+    }
+
+    const int* aligned_input = input + head;
+    const int aligned_count = count - head;
+    const int num_vec8 = aligned_count >> 3;
+
+    if (tid < num_vec8) {
+        const int4* v_ptr = reinterpret_cast<const int4*>(aligned_input);
+        int4 v1 = v_ptr[tid * 2];
+        int4 v2 = v_ptr[tid * 2 + 1];
+        val += (v1.x + v1.y) + (v1.z + v1.w) + (v2.x + v2.y) + (v2.z + v2.w);
+    } else {
+        int idx = tid << 3;
+        if (idx < aligned_count) {
+            #pragma unroll
+            for (int k = 0; k < 8 && (idx + k) < aligned_count; ++k) {
+                val += aligned_input[idx + k];
+            }
+        }
+    }
+
     #pragma unroll
-    for(int offset = WARP_SIZE / 2; offset > 0; offset >>= 1)
-    {
+    for (int offset = WARP_SIZE / 2; offset > 0; offset >>= 1) {
         val += __shfl_down_sync(0xffffffff, val, offset);
     }
-    return val;
+
+    if ((threadIdx.x & (WARP_SIZE - 1)) == 0 && val != 0) {
+        atomicAdd(output, val);
+    }
 }
 
-__global__ void subarray_sum_kernel(const int* __restrict__ input, int* output, int S, int E)
-{
-    int tid = blockIdx.x * blockDim.x + threadIdx.x;
-    int lane_id = threadIdx.x & (WARP_SIZE - 1);
-    int warp_id = threadIdx.x >> 5;
-
-    extern __shared__ int warp_sums[];
-
-    int sum = 0;
-
-    for(int i = tid + S; i <= E; i += blockDim.x * gridDim.x)
-    {
-        sum += input[i];
-    }
-
-    int b_sum = warp_reduce_sum(sum);
-    if(lane_id == 0)
-        warp_sums[warp_id] = b_sum;
-    
-    __syncthreads();
-
-    if(warp_id == 0)
-    {
-        int nWarps = blockDim.x / WARP_SIZE;
-        int block_total = (lane_id < nWarps) ? warp_sums[lane_id] : 0;
-        block_total = warp_reduce_sum(block_total);
-        if(lane_id == 0)
-            atomicAdd(output, block_total);
-    }
-
-}
 // input, output are device pointers (i.e. pointers to memory on the GPU)
-extern "C" void solve(const int* input, int* output, int N, int S, int E) 
-{
-    int block_size = 256;
-    int range_len = E - S + 1;
-    int grid_size = std::min((range_len + block_size - 1) / block_size, 64);
-    int smem_size = (block_size / WARP_SIZE) * sizeof(int);
-    subarray_sum_kernel<<<grid_size, block_size, smem_size>>>(input, output, S, E);
+extern "C" void solve(const int* input, int* output, int N, int S, int E) {
+    if (S > E) return;
+
+    // Shift base pointer to subarray start
+    input += S;
+    int count = E - S + 1;
+
+    int head = (4 - (S & 3)) & 3;
+    if (head > count) head = count;
+
+    int aligned_count = count - head;
+    int threads_per_block = 256;
+    int blocks = ((aligned_count + 7) / 8 + threads_per_block - 1) / threads_per_block;
+    if (blocks < 1) blocks = 1;
+
+    subarray_sum_kernel<<<blocks, threads_per_block>>>(input, output, count, head);
 }
